@@ -30,13 +30,13 @@ import scipy
 from skimage.feature import peak_local_max
 
 class Mol(object):
-    def __init__(self, I, col, row):
-        self.col = col
+    def __init__(self, I, row, col):
         self.row = row
-        self.I_frame = np.sum(np.sum(I[:,col-1:col+1,row-1:row+1], axis=2), axis=1)
+        self.col = col
+        self.I_frame = np.mean(np.mean(I[:,row-1:row+1,col-1:col+1], axis=2), axis=1)
 
     def evaluate(self):
-        if self.I_frame.std() > 400:
+        if self.I_frame.std() > 100:
             return True
         else: 
             return False
@@ -47,10 +47,10 @@ class Movie(object):
         self.movie_path = data_path + '\\' + movie_name   
         movie = Image.open(self.movie_path)
         self.n_frame = movie.n_frames
-        self.n_row = movie.size[0]
-        self.n_col = movie.size[1]
+        self.n_row = movie.size[1]
+        self.n_col = movie.size[0]
         
-        self.I = np.zeros((self.n_frame, self.n_col, self.n_row), dtype=int)
+        self.I = np.zeros((self.n_frame, self.n_row, self.n_col), dtype=int)
         for i in range(self.n_frame): 
             movie.seek(i) # Move to i-th frame
             self.I[i,] = np.array(movie, dtype=int)
@@ -67,11 +67,11 @@ class Movie(object):
         print(self.n_peaks, 'peaks')
         
     def find_mols(self): # Find intensity changes at peaks
-        col = self.peaks[:,1]
         row = self.peaks[:,0]
+        col = self.peaks[:,1]
         self.mols = []
         for i in range(self.n_peaks):
-            mol = Mol(self.I, col[i], row[i])
+            mol = Mol(self.I, row[i], col[i])
             if mol.evaluate():
                 self.mols.append(mol)    
         print(len(self.mols), 'molecules')  
@@ -115,27 +115,28 @@ class Data(object):
             sp2.imshow(movie.I_max, cmap=cm.gray)
             for j in range(n_mol):
                 sp2.plot(movie.mols[j].col, movie.mols[j].row, 'ro', markersize=2, alpha=0.5)  
-            title2 = 'Molss = %d' % (n_mol)  
+            title2 = 'Molecules = %d' % (n_mol)  
             sp2.set_title(title2)                    
             fig1.tight_layout()
             
             n_fig = 10   
             i_fig = 1                     
             n_col = 10
-            n_row = 10
+            n_row = 8
             for j in range(n_mol):
                 k = j%(n_col*n_row)
                 if k == 0:
                     if i_fig == n_fig:
                         break
                     else:
-                        fig = plt.figure(i_fig+1)
+                        fig_title = "%s %d" % (self.movie_list[i], i_fig)                        
+                        fig = plt.figure(fig_title)
                         i_fig += 1
-                sp = fig.add_subplot(n_col, n_row, k+1)
-                sp.plot(movie.mols[j].I_frame, 'k.')
-                title_sp = '%d, %d' % (movie.mols[j].col, movie.mols[j].row)
+                sp = fig.add_subplot(n_row, n_col, k+1)
+                sp.plot(movie.mols[j].I_frame, 'k.', markersize=1)
+                title_sp = '%d, %d' % (movie.mols[j].row, movie.mols[j].col)
                 sp.set_title(title_sp)
-                fig.subplots_adjust(wspace=0.5, hspace=1.5)
+                fig.subplots_adjust(wspace=0.5, hspace=1.0)
                                                                                                                                                       
         plt.show()
 
