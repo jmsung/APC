@@ -33,8 +33,14 @@ class Mol(object):
     def __init__(self, I, col, row):
         self.col = col
         self.row = row
-        self.I_frame = I[:,col-1:col+1,row-1:row+1].sum()     
-                     
+        self.I_frame = np.sum(np.sum(I[:,col-1:col+1,row-1:row+1], axis=2), axis=1)
+
+    def evaluate(self):
+        if self.I_frame.std() > 400:
+            return True
+        else: 
+            return False
+                             
 class Movie(object):
     def __init__(self, movie_name, data_path):
         self.movie_name = movie_name
@@ -58,7 +64,7 @@ class Movie(object):
         I = self.I_max
         self.peaks = peak_local_max(I, min_distance=1)
         self.n_peaks = len(self.peaks[:, 1])
-        print(self.n_peaks, ' molecules')
+        print(self.n_peaks, 'peaks')
         
     def find_mols(self): # Find intensity changes at peaks
         col = self.peaks[:,1]
@@ -66,7 +72,9 @@ class Movie(object):
         self.mols = []
         for i in range(self.n_peaks):
             mol = Mol(self.I, col[i], row[i])
-            self.mols.append(mol)      
+            if mol.evaluate():
+                self.mols.append(mol)    
+        print(len(self.mols), 'molecules')  
                         
 class Data(object):
     def __init__(self):
@@ -86,6 +94,7 @@ class Data(object):
             movie = self.movies[i]
             movie.bg() # Pixel-wise bg subtraction, from the minimum intensity of movie 
             movie.I_max = np.max(movie.I, axis=0)
+            movie.I_std = np.std(movie.I, axis=0)
             movie.find_peaks()
             movie.find_mols()
             
@@ -95,23 +104,39 @@ class Data(object):
         # Plot overall movie images
         for i in range(self.movie_num):
             movie = self.movies[i] 
+            n_mol = len(movie.mols)
             
-            fig1, (sp1, sp2) = plt.subplots(ncols=2)      
+            fig1 = plt.figure(self.movie_list[i])    
+            sp1 = fig1.add_subplot(121)  
             sp1.imshow(movie.I_max, cmap=cm.gray)
-#            fig1.colorbar(im1, ax=sp1) 
-            sp1.set_title('Projected max intensity')
+            sp1.set_title('Projected max intensity') 
             
+            sp2 = fig1.add_subplot(122) 
             sp2.imshow(movie.I_max, cmap=cm.gray)
-            sp2.plot(movie.peaks[:, 1], movie.peaks[:, 0], 'ro')    
-            sp2.set_title('Projected max intensity')            
-
-#            sp2.hist(movie.I_max.flatten(), bins='scott', histtype='step', color='k')  
-#            sp2.set_yscale("log") 
-#            sp2.set_title('Histogram of max intensity')
-                       
+            for j in range(n_mol):
+                sp2.plot(movie.mols[j].col, movie.mols[j].row, 'ro', markersize=2, alpha=0.5)  
+            title2 = 'Molss = %d' % (n_mol)  
+            sp2.set_title(title2)                    
             fig1.tight_layout()
-                      
-                                                                                                                                                           
+            
+            n_fig = 10   
+            i_fig = 1                     
+            n_col = 10
+            n_row = 10
+            for j in range(n_mol):
+                k = j%(n_col*n_row)
+                if k == 0:
+                    if i_fig == n_fig:
+                        break
+                    else:
+                        fig = plt.figure(i_fig+1)
+                        i_fig += 1
+                sp = fig.add_subplot(n_col, n_row, k+1)
+                sp.plot(movie.mols[j].I_frame, 'k.')
+                title_sp = '%d, %d' % (movie.mols[j].col, movie.mols[j].row)
+                sp.set_title(title_sp)
+                fig.subplots_adjust(wspace=0.5, hspace=1.5)
+                                                                                                                                                      
         plt.show()
 
 
