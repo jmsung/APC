@@ -36,11 +36,11 @@ class Mol(object):
         self.I_frame = np.mean(np.mean(I[:,row-1:row+1,col-1:col+1], axis=2), axis=1)
 
     def evaluate(self):
-        if self.I_frame.std() > 100:
+        if self.I_frame.std() > 120:
             return True
         else: 
             return False
-                             
+                            
 class Movie(object):
     def __init__(self, movie_name, data_path):
         self.movie_name = movie_name
@@ -67,8 +67,8 @@ class Movie(object):
         print(self.n_peaks, 'peaks')
         
     def find_mols(self): # Find intensity changes at peaks
-        row = self.peaks[:,0]
-        col = self.peaks[:,1]
+        row = self.peaks[::-1,0]
+        col = self.peaks[::-1,1]
         self.mols = []
         for i in range(self.n_peaks):
             mol = Mol(self.I, row[i], col[i])
@@ -94,7 +94,9 @@ class Data(object):
             movie = self.movies[i]
             movie.bg() # Pixel-wise bg subtraction, from the minimum intensity of movie 
             movie.I_max = np.max(movie.I, axis=0)
+            movie.I_mean = np.mean(movie.I, axis=0)
             movie.I_std = np.std(movie.I, axis=0)
+            movie.I_SNR = movie.I_max / movie.I_std
             movie.find_peaks()
             movie.find_mols()
             
@@ -118,7 +120,21 @@ class Data(object):
             title2 = 'Molecules = %d' % (n_mol)  
             sp2.set_title(title2)                    
             fig1.tight_layout()
+
+            fig2 = plt.figure()
+            sp1 = fig2.add_subplot(221); sp1.hist(movie.I_max.flatten(), bins='scott', histtype='step', color='k'); 
+            sp1.set_xscale("log"); sp1.set_yscale("log"); sp1.set_ylabel('Max'); sp1.set_title(np.median(movie.I_max.flatten()))
             
+            sp2 = fig2.add_subplot(222); sp2.hist(movie.I_mean.flatten(), bins='scott', histtype='step', color='k'); 
+            sp2.set_xscale("log"); sp2.set_yscale("log"); sp2.set_ylabel('Mean'); sp2.set_title(np.median(movie.I_mean.flatten()))
+            
+            sp3 = fig2.add_subplot(223); sp3.hist(movie.I_std.flatten(), bins='scott', histtype='step', color='k'); 
+            sp3.set_xscale("log"); sp3.set_yscale("log"); sp3.set_ylabel('Std'); sp3.set_title(np.median(movie.I_std.flatten()))
+
+            sp4 = fig2.add_subplot(224); sp4.hist(movie.I_SNR.flatten(), bins='scott', histtype='step', color='k'); 
+            sp4.set_ylabel('SNR'); sp4.set_title(np.median(movie.I_SNR.flatten()))
+
+
             n_fig = 10   
             i_fig = 1                     
             n_col = 10
