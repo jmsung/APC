@@ -29,18 +29,45 @@ from scipy.optimize import curve_fit
 import scipy
 from skimage.feature import peak_local_max
 
+def reject_outliers(data, m = 3.):
+    d = np.abs(data - np.median(data))
+    mdev = np.median(d)
+    s = d/mdev if mdev else 0.
+    return data[s<m]
+
+def running_avg(x, n):
+    return np.convolve(x, np.ones((n,))/n, mode='valid')
+    
+def softmax(x):
+    e_x = np.exp(x - np.max(x))
+    return e_x / e_x.sum()
+
 class Mol(object):
-    def __init__(self, I, row, col):
+    def __init__(self, I, row, col):  
         self.row = row
         self.col = col
-        self.I_frame = np.mean(np.mean(I[:,row-1:row+1,col-1:col+1], axis=2), axis=1)
+        I_frame = np.mean(np.mean(I[:,row-1:row+1,col-1:col+1], axis=2), axis=1)
+        self.I_frame = I_frame - np.min(I_frame)
+        self.I_max = np.max(self.I_frame)
 
     def evaluate(self):
-        if self.I_frame.std() > 120:
+        SNR = 5
+        n_signal = 5
+        
+        signal = self.I_frame / self.noise > SNR
+        
+        if np.sum(signal[n_signal:]*signal[:-n_signal]) > 1:
             return True
         else: 
             return False
-                            
+            
+    def find_noise(self, k):
+        n = int(k)
+        noise0 = self.I_frame[n:-n]-self.I_avg
+        noise1 = reject_outliers(noise0)
+        return np.std(noise1)        
+                
+                                                
 class Movie(object):
     def __init__(self, movie_name, data_path):
         self.movie_name = movie_name
@@ -49,20 +76,24 @@ class Movie(object):
         self.n_frame = movie.n_frames
         self.n_row = movie.size[1]
         self.n_col = movie.size[0]
+        self.n_avg = 5
+        self.frame = np.arange(self.n_frame)
+        self.frame_avg = running_avg(self.frame, self.n_avg)
+        
         
         self.I = np.zeros((self.n_frame, self.n_row, self.n_col), dtype=int)
         for i in range(self.n_frame): 
             movie.seek(i) # Move to i-th frame
             self.I[i,] = np.array(movie, dtype=int)
         
-    def bg(self):
+    def offset(self):
         I_min = np.min(self.I, axis=0)
         for i in range(self.n_frame):
             self.I[i,] = self.I[i,] - I_min
-            
+                        
     def find_peaks(self): # Find local maxima from movie.I_max
         I = self.I_max
-        self.peaks = peak_local_max(I, min_distance=1)
+        self.peaks = peak_local_max(I, min_distance=2)
         self.n_peaks = len(self.peaks[:, 1])
         print(self.n_peaks, 'peaks')
         
@@ -72,10 +103,17 @@ class Movie(object):
         self.mols = []
         for i in range(self.n_peaks):
             mol = Mol(self.I, row[i], col[i])
+            mol.I_avg = running_avg(mol.I_frame, self.n_avg)
+            mol.noise = mol.find_noise((self.n_avg-1)/2)
+            mol.SNR = mol.I_max / mol.noise
             if mol.evaluate():
                 self.mols.append(mol)    
         print(len(self.mols), 'molecules')  
-                        
+        
+    def find_binding(self):
+        pass
+                                        
+                                                                                                                                                                                                
 class Data(object):
     def __init__(self):
         self.data_path = os.getcwd()
@@ -92,13 +130,14 @@ class Data(object):
     def analysis(self):
         for i in range(self.movie_num):
             movie = self.movies[i]
-            movie.bg() # Pixel-wise bg subtraction, from the minimum intensity of movie 
+            movie.offset() # Pixel-wise bg subtraction, from the minimum intensity of movie 
             movie.I_max = np.max(movie.I, axis=0)
             movie.I_mean = np.mean(movie.I, axis=0)
             movie.I_std = np.std(movie.I, axis=0)
             movie.I_SNR = movie.I_max / movie.I_std
             movie.find_peaks()
             movie.find_mols()
+            movie.find_binding()
             
                                                
     def plot(self):                  
@@ -121,24 +160,29 @@ class Data(object):
             sp2.set_title(title2)                    
             fig1.tight_layout()
 
+
+            mol_Imax = []
+            mol_noise = []
+            mol_SNR = []
+            for j in range(n_mol):
+                mol_Imax.append(movie.mols[j].I_max)
+                mol_noise.append(movie.mols[j].noise)
+                mol_SNR.append(movie.mols[j].SNR)            
+
             fig2 = plt.figure()
-            sp1 = fig2.add_subplot(221); sp1.hist(movie.I_max.flatten(), bins='scott', histtype='step', color='k'); 
-            sp1.set_xscale("log"); sp1.set_yscale("log"); sp1.set_ylabel('Max'); sp1.set_title(np.median(movie.I_max.flatten()))
+            sp1 = fig2.add_subplot(221); sp1.hist(mol_Imax, bins='scott', histtype='step', color='k'); 
+            sp1.set_ylabel('Max'); 
             
-            sp2 = fig2.add_subplot(222); sp2.hist(movie.I_mean.flatten(), bins='scott', histtype='step', color='k'); 
-            sp2.set_xscale("log"); sp2.set_yscale("log"); sp2.set_ylabel('Mean'); sp2.set_title(np.median(movie.I_mean.flatten()))
-            
-            sp3 = fig2.add_subplot(223); sp3.hist(movie.I_std.flatten(), bins='scott', histtype='step', color='k'); 
-            sp3.set_xscale("log"); sp3.set_yscale("log"); sp3.set_ylabel('Std'); sp3.set_title(np.median(movie.I_std.flatten()))
+            sp2 = fig2.add_subplot(222); sp2.hist(mol_noise, bins='scott', histtype='step', color='k'); 
+            sp2.set_ylabel('noise'); 
 
-            sp4 = fig2.add_subplot(224); sp4.hist(movie.I_SNR.flatten(), bins='scott', histtype='step', color='k'); 
-            sp4.set_ylabel('SNR'); sp4.set_title(np.median(movie.I_SNR.flatten()))
+            sp3 = fig2.add_subplot(223); sp3.hist(mol_SNR, bins='scott', histtype='step', color='k'); 
+            sp3.set_ylabel('SNR'); 
 
-
-            n_fig = 10   
+            n_fig = 10
             i_fig = 1                     
-            n_col = 10
-            n_row = 8
+            n_col = 5
+            n_row = 4
             for j in range(n_mol):
                 k = j%(n_col*n_row)
                 if k == 0:
@@ -149,11 +193,13 @@ class Data(object):
                         fig = plt.figure(fig_title)
                         i_fig += 1
                 sp = fig.add_subplot(n_row, n_col, k+1)
-                sp.plot(movie.mols[j].I_frame, 'k.', markersize=1)
-                title_sp = '%d, %d' % (movie.mols[j].row, movie.mols[j].col)
+                sp.plot(movie.frame, movie.mols[j].I_frame, 'k', linewidth=2, markersize=3)
+                #sp.plot(movie.frame_avg, movie.mols[j].I_avg, 'r', linewidth=3)
+
+                title_sp = '(%d, %d) (noise = %d)' % (movie.mols[j].row, movie.mols[j].col, movie.mols[j].noise)
                 sp.set_title(title_sp)
                 fig.subplots_adjust(wspace=0.5, hspace=1.0)
-                                                                                                                                                      
+                                                                                                                                            
         plt.show()
 
 
