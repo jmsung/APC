@@ -28,6 +28,7 @@ import os
 from scipy.optimize import curve_fit
 import scipy
 from skimage.feature import peak_local_max
+import multiprocessing as mp
 
 def reject_outliers(data, m = 3.):
     d = np.abs(data - np.median(data))
@@ -46,17 +47,19 @@ class Mol(object):
     def __init__(self, I, row, col):  
         self.row = row
         self.col = col
-        I_frame = np.mean(np.mean(I[:,row-1:row+1,col-1:col+1], axis=2), axis=1)
-        self.I_frame = I_frame - np.min(I_frame)
+        I = np.mean(np.mean(I[:,row-1:row+1,col-1:col+1], axis=2), axis=1)
+        I = I - np.min(I)
+        BG = np.mean(reject_outliers(I[I < np.max(I)/2]))
+        self.I_frame = I - BG
         self.I_max = np.max(self.I_frame)
 
     def evaluate(self):
-        SNR = 5
-        n_signal = 5
+        SNR = 7
+        n_signal = 7
         
         signal = self.I_frame / self.noise > SNR
         
-        if np.sum(signal[n_signal:]*signal[:-n_signal]) > 1:
+        if np.sum(signal[n_signal:]*signal[:-n_signal]) > 0:
             return True
         else: 
             return False
@@ -193,7 +196,8 @@ class Data(object):
                         fig = plt.figure(fig_title)
                         i_fig += 1
                 sp = fig.add_subplot(n_row, n_col, k+1)
-                sp.plot(movie.frame, movie.mols[j].I_frame, 'k', linewidth=2, markersize=3)
+                sp.plot(movie.frame, movie.mols[j].I_frame, 'k', linewidth=1, markersize=3)
+                sp.axhline(y=0, color='b', linewidth=1)
                 #sp.plot(movie.frame_avg, movie.mols[j].I_avg, 'r', linewidth=3)
 
                 title_sp = '(%d, %d) (noise = %d)' % (movie.mols[j].row, movie.mols[j].col, movie.mols[j].noise)
