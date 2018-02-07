@@ -1,4 +1,4 @@
-"""
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 Analysis of SiMPull data (Jongmin Sung)
 
 class Data() 
@@ -16,8 +16,7 @@ class Pixel()
 class Molecule()
 - mol_number, mol_position, mol_intensity 
 
-
-"""
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 from __future__ import division, print_function, absolute_import
 import numpy as np
@@ -25,7 +24,6 @@ from PIL import Image
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import os
-from scipy.optimize import minimize
 from skimage.feature import peak_local_max
 
 def reject_outliers(data, m = 3.):
@@ -36,26 +34,11 @@ def reject_outliers(data, m = 3.):
 
 def running_avg(x, n):
     return np.convolve(x, np.ones((n,))/n, mode='valid')
-    
-def softmax(x):
-    e_x = np.exp(x - np.max(x))
-    return e_x / e_x.sum()
-
+   
 # Exponential function with cutoff at x = b 
 def Exp_cutoff(a, b, x):
-    return np.exp(-x/a)/a * (0.5*(np.sign(x-b)+1))
-        
-# LogLikelihood 
-def LL(param, b, x):
-    a = np.abs(param)      
-    return np.sum(np.log10(Exp_cutoff(a, b, x)))
-
-def MLE(a, b, x): 
-    fun = lambda *args: -LL(*args)
-    p0 = [a]
-    result = minimize(fun, p0, method='SLSQP', args=(b, x)) 
-    return result
-
+    return np.exp(-(x-b)/a)/a * (0.5*(np.sign(x-b)+1))
+         
 class Mol(object):
     def __init__(self, I, row, col):  
         self.row = row
@@ -65,11 +48,17 @@ class Mol(object):
         BG = np.mean(reject_outliers(I[I < np.max(I)/2]))
         self.I_frame = I - BG
         self.I_max = np.max(self.I_frame)
+    
+    def find_noise(self):
+        self.I_avg = running_avg(self.I_frame, 3)
+        noise0 = self.I_frame[1:-1]-self.I_avg
+        noise1 = reject_outliers(noise0)
+        self.noise = np.std(noise1)    
 
     def evaluate(self):
         self.SNR_min = 5
         self.SNR_max = 10
-        self.dwell_min = 5
+        self.dwell_min = 10
         self.dwell_max = 100
         self.blinking = 5
         
@@ -132,18 +121,9 @@ class Mol(object):
         for i in range(len(t_b)): 
             self.dwell.append(t_ub[i] - t_b[i])
             I_mean = np.mean(self.I_frame[t_b[i]+1:t_ub[i]-1])
-            self.SNR.append(I_mean/self.noise)
+            self.SNR.append(I_mean/self.noise)            
             self.I_fit[t_b[i]+1:t_ub[i]+1] = I_mean
-
         return True
-
-        
-    def find_noise(self):
-        self.I_avg = running_avg(self.I_frame, 3)
-        noise0 = self.I_frame[1:-1]-self.I_avg
-        noise1 = reject_outliers(noise0)
-        self.noise = np.std(noise1)        
-
                                          
 class Movie(object):
     def __init__(self, movie_name, data_path):
@@ -167,13 +147,15 @@ class Movie(object):
         for i in range(self.n_frame):
             self.I[i,] = self.I[i,] - I_min
                         
-    def find_peaks(self): # Find local maxima from movie.I_max
+    # Find local maxima from movie.I_max                    
+    def find_peaks(self): 
         I = self.I_max
-        self.peaks = peak_local_max(I, min_distance=2)
+        self.peaks = peak_local_max(I, min_distance=1)
         self.n_peaks = len(self.peaks[:, 1])
         print(self.n_peaks, 'peaks')
         
-    def find_mols(self): # Find intensity changes at peaks
+    # Find real molecules from the peaks
+    def find_mols(self): 
         row = self.peaks[::-1,0]
         col = self.peaks[::-1,1]
         self.mols = []
@@ -189,13 +171,7 @@ class Movie(object):
                 self.noise.append(mol.noise)
                 self.SNR.extend(mol.SNR)
         print(len(self.mols), 'molecules')  
-        
-    def find_dwelltime(self):
-        x = np.array(self.dwells)
-        result = MLE(np.mean(self.dwells), np.min(self.dwells), x)
-        self.dwell_fit = result["x"]
-                                
-                                                                                                                                                                                                
+                                                                                                                                                                                                     
 class Data(object):
     def __init__(self):
         self.data_path = os.getcwd()
@@ -219,9 +195,9 @@ class Data(object):
             movie.I_SNR = movie.I_max / movie.I_std
             movie.find_peaks()
             movie.find_mols()
-            movie.find_dwelltime()
-            
-                                               
+            movie.dwell_mean = np.mean(movie.dwells)-min(movie.dwells)
+            movie.dwell_std = np.std(movie.dwells)
+                                                                                                                                                        
     def plot(self):                  
         plt.close('all')
         # Plot overall movie images
@@ -244,41 +220,35 @@ class Data(object):
             fig1.tight_layout()
 
             # Figure 2
-            fig2 = plt.figure(2)       
-            sp1 = fig2.add_subplot(221)
-            sp1.hist(movie.SNR, bins='scott', histtype='step', color='k', linewidth = 2)
-            title1 = 'Mean SNR = %.1f (N = %d)' % (np.mean(movie.SNR), len(movie.SNR))
-            sp1.set_title(title1)
-
-            sp2 = fig2.add_subplot(222)
-            sp2.hist(movie.noise, bins='scott', histtype='step', color='k', linewidth = 2)
-            title2 = 'Mean noise = %.1f (N = %d)' % (np.mean(movie.noise), len(movie.noise))
-            sp2.set_title(title2)            
+            fig2 = plt.figure(self.movie_list[i]+' Analysis')                
                                     
-            sp3 = fig2.add_subplot(223)
-            hist_lifetime = sp3.hist(movie.dwells, bins='scott', normed=False, color='k', histtype='step', linewidth=2)
+            sp1 = fig2.add_subplot(121)
+            hist_lifetime = sp1.hist(movie.dwells, bins='scott', normed=False, color='k', histtype='step', linewidth=2)
             n_lifetime = len(movie.dwells)*(hist_lifetime[1][1] - hist_lifetime[1][0])
             x_lifetime = np.linspace(0, max(movie.dwells), 1000)
-            y_lifetime = n_lifetime*Exp_cutoff(movie.dwell_fit[0], min(movie.dwells), x_lifetime)
-            sp3.plot(x_lifetime, y_lifetime, 'r', linewidth=2)        
-            
-            sp4 = fig2.add_subplot(224) 
-            hist_lifetime = sp4.hist(movie.dwells, bins='scott', normed=False, color='k', histtype='step', linewidth=2)
-            sp4.set_yscale('log')
-            sp4.semilogy(x_lifetime, y_lifetime, 'r', linewidth=2) 
-            title4 = 'Mean dwell time = %.1f (N = %d)' % (movie.dwell_fit, len(movie.dwells))
-            sp4.set_title(title4)
-            print(title4)
+
+            y_mean = n_lifetime*Exp_cutoff(movie.dwell_mean, min(movie.dwells), x_lifetime) 
+            sp1.plot(x_lifetime, y_mean, 'r', linewidth=2)  
+            title = 'Mean dwell time = %.1f +/- %.1f (N = %d)' % (movie.dwell_mean, movie.dwell_std/(len(movie.dwells)**0.5), len(movie.dwells))
+            sp1.set_title(title)
+                        
+            sp2 = fig2.add_subplot(122) 
+            hist_lifetime = sp2.hist(movie.dwells, bins='scott', normed=False, color='k', histtype='step', linewidth=2)
+            sp2.set_yscale('log')
+            sp2.semilogy(x_lifetime, y_mean, 'r', linewidth=2)
+            title = 'Mean-Std ratio = %.2f' % (movie.dwell_mean / movie.dwell_std)
+            sp2.set_title(title)
+
 
             # Figure for individual traces  
-            n_fig = 10
+            n_fig = 1
             i_fig = 1                     
             n_col = 4
             n_row = 5
             for j in range(n_mol):
                 k = j%(n_col*n_row)
                 if k == 0:
-                    if i_fig == n_fig:
+                    if i_fig > n_fig:
                         break
                     else:
                         fig_title = "%s %d" % (self.movie_list[i], i_fig)                        
