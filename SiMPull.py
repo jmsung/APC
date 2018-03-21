@@ -133,9 +133,9 @@ class Movie(object):
         self.n_frame = movie.n_frames
         self.n_row = movie.size[1]
         self.n_col = movie.size[0]
-        self.n_avg = 5
-        self.frame = np.arange(self.n_frame)
-        self.frame_avg = running_avg(self.frame, self.n_avg)
+#        self.n_avg = 5
+#        self.frame = np.arange(self.n_frame)
+#        self.frame_avg = running_avg(self.frame, self.n_avg)
           
         self.I = np.zeros((self.n_frame, self.n_row, self.n_col), dtype=int)
         for i in range(self.n_frame): 
@@ -150,7 +150,7 @@ class Movie(object):
     # Find local maxima from movie.I_max                    
     def find_peaks(self): 
         I = self.I_max
-        self.peaks = peak_local_max(I, min_distance=1)
+        self.peaks = peak_local_max(I, min_distance=2)
         self.n_peaks = len(self.peaks[:, 1])
         print(self.n_peaks, 'peaks')
         
@@ -177,7 +177,11 @@ class Data(object):
         self.data_path = os.getcwd()
         path_split = self.data_path.split('\\')
         self.data_name = path_split[len(path_split)-1]
-        self.movie_list = os.listdir(self.data_path) 
+        self.file_list = os.listdir(self.data_path) 
+        self.movie_list = []
+        for i in range(len(self.file_list)):
+            if self.file_list[i][-3:] == 'tif':
+                self.movie_list.append(self.file_list[i])
         self.movie_num = len(self.movie_list)
         self.movies = [] 
         for movie_name in self.movie_list:
@@ -188,11 +192,9 @@ class Data(object):
     def analysis(self):
         for i in range(self.movie_num):
             movie = self.movies[i]
+            movie.I_min = np.min(movie.I, axis=0)
             movie.offset() # Pixel-wise bg subtraction, from the minimum intensity of movie 
             movie.I_max = np.max(movie.I, axis=0)
-            movie.I_mean = np.mean(movie.I, axis=0)
-            movie.I_std = np.std(movie.I, axis=0)
-            movie.I_SNR = movie.I_max / movie.I_std
             movie.find_peaks()
             movie.find_mols()
             movie.dwell_mean = np.mean(movie.dwells)-min(movie.dwells)
@@ -206,21 +208,28 @@ class Data(object):
             n_mol = len(movie.mols)
             
             # Figure 1
-            fig1 = plt.figure(self.movie_list[i])    
-            sp1 = fig1.add_subplot(121)  
-            sp1.imshow(movie.I_max, cmap=cm.gray)
-            sp1.set_title('Projected max intensity') 
+            fig1 = plt.figure(self.movie_list[i], figsize = (20, 10), dpi=300)    
             
-            sp2 = fig1.add_subplot(122) 
+            sp1 = fig1.add_subplot(131)  
+            sp1.imshow(movie.I_min, cmap=cm.gray)
+            sp1.set_title('Background') 
+            
+            sp2 = fig1.add_subplot(132)  
             sp2.imshow(movie.I_max, cmap=cm.gray)
+            sp2.set_title('Projected max intensity') 
+            
+            sp3 = fig1.add_subplot(133) 
+            sp3.imshow(movie.I_max, cmap=cm.gray)
             for j in range(n_mol):
-                sp2.plot(movie.mols[j].col, movie.mols[j].row, 'ro', markersize=2, alpha=0.5)  
+                sp3.plot(movie.mols[j].col, movie.mols[j].row, 'ro', markersize=2, alpha=0.5)  
             title = 'Molecules = %d' % (n_mol)  
-            sp2.set_title(title)                    
-            fig1.tight_layout()
+            sp3.set_title(title)      
+            
+            fig1.savefig('Fig1.png')                
+
 
             # Figure 2
-            fig2 = plt.figure(self.movie_list[i]+' Analysis')                
+            fig2 = plt.figure(self.movie_list[i]+' Analysis', figsize = (20, 10), dpi=300)                
                                     
             sp1 = fig2.add_subplot(121)
             hist_lifetime = sp1.hist(movie.dwells, bins='scott', normed=False, color='k', histtype='step', linewidth=2)
@@ -238,33 +247,43 @@ class Data(object):
             sp2.semilogy(x_lifetime, y_mean, 'r', linewidth=2)
             title = 'Mean-Std ratio = %.2f' % (movie.dwell_mean / movie.dwell_std)
             sp2.set_title(title)
+            fig2.tight_layout() 
+            fig2.savefig('Fig2.png')
 
 
-            # Figure for individual traces  
-            n_fig = 1
-            i_fig = 1                     
-            n_col = 4
-            n_row = 5
-            for j in range(n_mol):
-                k = j%(n_col*n_row)
-                if k == 0:
-                    if i_fig > n_fig:
-                        break
-                    else:
-                        fig_title = "%s %d" % (self.movie_list[i], i_fig)                        
-                        fig = plt.figure(fig_title)
-                        i_fig += 1
-                sp = fig.add_subplot(n_row, n_col, k+1)
-                sp.plot(movie.frame, movie.mols[j].I_frame, 'k.', linewidth=0.5, markersize=3)
-                sp.plot(movie.frame, movie.mols[j].I_s, 'b', linewidth=1, markersize=3)
-                sp.plot(movie.frame, movie.mols[j].I_fit, 'r', linewidth=2, markersize=3)
-                sp.axhline(y=0, color='k', linestyle='dashed', linewidth=1)
-                sp.axhline(y=movie.mols[j].noise*movie.mols[j].SNR_min, color='k', linestyle='dashed', linewidth=1)
+#            # Figure for individual traces    
+#            i_fig = 1               
+#            n_col = 4
+#            n_row = 5
 
-                title_sp = '(%d, %d) (noise = %d)' % (movie.mols[j].row, movie.mols[j].col, movie.mols[j].noise)
-                sp.set_title(title_sp)
-                fig.subplots_adjust(wspace=0.5, hspace=1.0)
-                                                                                                                                            
+#            directory = self.data_path+'\\Figures'
+#            if not os.path.exists(directory):
+#                os.makedirs(directory)
+
+#            for j in range(n_mol):
+#                k = j%(n_col*n_row)
+#                if k == 0:
+#                    fig_title = "%s %d" % (self.movie_list[i], i_fig)                        
+#                    fig = plt.figure(fig_title, figsize = (25, 15), dpi=300)
+#                    i_fig += 1
+
+#                sp = fig.add_subplot(n_row, n_col, k+1)
+#                sp.plot(movie.frame, movie.mols[j].I_frame, 'k.', linewidth=0.5, markersize=3)
+#                sp.plot(movie.frame, movie.mols[j].I_s, 'b', linewidth=1, markersize=3)
+#                sp.plot(movie.frame, movie.mols[j].I_fit, 'r', linewidth=2, markersize=3)
+#                sp.axhline(y=0, color='k', linestyle='dashed', linewidth=1)
+#                sp.axhline(y=movie.mols[j].noise*movie.mols[j].SNR_min, color='r', linestyle='dotted', linewidth=1)
+#                sp.axhline(y=movie.mols[j].noise*movie.mols[j].SNR_max, color='b', linestyle='dotted', linewidth=1)
+#                title_sp = '(%d, %d) (noise = %.1f)' % (movie.mols[j].row, movie.mols[j].col, movie.mols[j].noise)
+#                sp.set_title(title_sp)
+#                fig.subplots_adjust(wspace=0.3, hspace=0.5)
+
+#                if (k == n_col*n_row-1) | (j == n_mol-1):
+#                    print("Figure %d (%d %%)" % (i_fig-1, (j/n_mol)*100))
+#                    fig.savefig(directory+"\\%s.png" % (fig_title)) 
+#                    fig.clf()
+#                    plt.close('all')
+                                                                                                                                      
         plt.show()
 
 
