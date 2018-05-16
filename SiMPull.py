@@ -26,6 +26,8 @@ from matplotlib import cm
 import os
 import shutil
 from skimage.feature import peak_local_max
+from scipy.optimize import curve_fit
+import time
 
 
 def reject_outliers(data, m = 3.):
@@ -43,7 +45,14 @@ def Exp_cutoff(a, b, x):
 
 def Exp(a, x):
     return np.exp(-(x)/a)/a * (0.5*(np.sign(x)+1))
-         
+     
+def exp1(x, a, b, c):
+    return a + b * np.exp(-x/c) 
+
+def exp2(x, a, b, c, d, e):
+    return a + b * np.exp(-x/c) + d* np.exp(-x/e) 
+
+    
 class Mol(object):
     def __init__(self, I, row, col, spot_size):  
         self.row = row
@@ -152,7 +161,7 @@ class Movie(object):
         I = self.I_max
         self.peaks = peak_local_max(I, min_distance=int(spot_size*1.5))
         self.n_peaks = len(self.peaks[:, 1])
-        print('Found', self.n_peaks, 'peaks')
+        print('\nFound', self.n_peaks, 'peaks. ')
         
     # Find real molecules from the peaks
     def find_mols(self, spot_size, SNR_min, dwell_min): 
@@ -170,7 +179,45 @@ class Movie(object):
                 self.dwells.extend(mol.dwell)
                 self.noise.append(mol.noise)
                 self.SNR.extend(mol.SNR)
-        print('Found', len(self.mols), 'molecules')  
+        print('Found', len(self.mols), 'molecules. \n')  
+        
+    def correlation(self, spot_size, n_corr):
+        n_frame = self.n_frame
+        n_peak = self.n_peaks
+        row = self.peaks[::-1,0]
+        col = self.peaks[::-1,1]
+
+        self.I_peak = np.zeros((n_peak, n_frame))   
+        self.corr = np.zeros((n_peak, n_corr))     
+
+        print("Analyzing correlation. ")
+        t0 = time.clock()
+
+        for i in range(n_peak):
+            s = int(spot_size/2)
+            I = np.mean(np.mean(self.I[:,row[i]-s:row[i]+s,col[i]-s:col[i]+s], axis=2), axis=1)
+            
+            I = I - np.min(I)
+            I = I/np.max(I)
+
+            bg_u = np.mean(I[I < 0.5])
+            bg_b = np.mean(I[I > 0.5])
+            self.I_peak[i] = (I - bg_u)/(bg_b - bg_u) 
+
+            for j in np.arange(1, n_corr+1):
+                corr = []
+                for k in range(n_frame-j):
+                    corr.append(self.I_peak[i][k]*self.I_peak[i][k+j])
+                self.corr[i, j-1] = np.mean(corr)
+
+            if i > 0 and (i % int(n_peak/10) == 0) :
+                t1 = time.clock()                  
+                print("%d %% done. %.1f min passed. " %(int(i/n_peak*100+1), (t1-t0)/60))
+
+        self.corr_mean = np.mean(self.corr, axis=0)
+        self.corr_sem = np.std(self.corr, axis=0)/n_peak**0.5
+
+
                                                                                                                                                                                                      
 class Data(object):
     def __init__(self):
@@ -183,10 +230,11 @@ class Data(object):
                 self.movie_name = self.file_list[i]
                 print('Movie name = ', self.movie_name)
         self.movie = Movie(self.movie_name, self.data_path)
+        self.tpf = float(input('Time per frame [s]? '))
+        self.n_corr = int(input('How many frames for correlation ? '))
         self.spot_size = int(input('Spot size [pixel]? '))
-        self.frame_rate = float(input('Frame rate [Hz]? '))
         self.SNR_min = int(input('Signal-noise cutoff [5]? '))
-        self.dwell_min = int(input('Minimum dwell cutoff [3]? '))
+        self.dwell_min = int(input('Minimum dwell cutoff in frame [3]? '))
                                                                                                                                                                                               
     def analysis(self):
         movie = self.movie
@@ -197,6 +245,7 @@ class Data(object):
         movie.find_mols(self.spot_size, self.SNR_min, self.dwell_min)
         movie.dwell_mean = np.mean(movie.dwells)-min(movie.dwells)
         movie.dwell_std = np.std(movie.dwells)
+        movie.correlation(self.spot_size, self.n_corr)
                                                                                                                                                         
     def plot(self):                  
         plt.close('all')
@@ -219,38 +268,154 @@ class Data(object):
         sp3.imshow(movie.I_max, cmap=cm.gray)
         for j in range(n_mol):
             sp3.plot(movie.mols[j].col, movie.mols[j].row, 'ro', markersize=2, alpha=0.5)  
-        title = 'Molecules = %d' % (n_mol)  
+        title = 'Molecules = %d, Spot size = %d' % (n_mol, self.spot_size)  
         sp3.set_title(title)      
         
         fig1.savefig('Fig1.png')   
         plt.close('all')
-                     
+   
         # Figure 2
-        fig2 = plt.figure(self.movie_name+' Analysis', figsize = (20, 10), dpi=300)          
-                                   
-        hist_lifetime = plt.hist(movie.dwells, bins='scott', normed=False, color='k', histtype='step', linewidth=2)
+        fig2 = plt.figure(self.movie_name+' Analysis', figsize = (20, 10), dpi=300)  
+        
+        sp1 = fig2.add_subplot(121)                                 
+        hist_lifetime = sp1.hist(movie.dwells, bins='scott', normed=False, color='k', histtype='step', linewidth=2)
         n_lifetime = len(movie.dwells)*(hist_lifetime[1][1] - hist_lifetime[1][0])
         x_lifetime = np.linspace(0, max(movie.dwells), 1000)
         y_mean = n_lifetime*Exp_cutoff(movie.dwell_mean, self.dwell_min, x_lifetime) 
-        plt.plot(x_lifetime, y_mean, 'r', linewidth=2)  
-#        plt.axis([0, movie.dwell_mean*5, 0, max(hist_lifetime)*1.2])
-        title = 'Mean dwell time = %.1f +/- %.1f (N = %d)' % (movie.dwell_mean, movie.dwell_std/(len(movie.dwells)**0.5), len(movie.dwells))
-        plt.title(title)
+        sp1.plot(x_lifetime, y_mean, 'r', linewidth=2)  
+        title = 'Mean dwell time [frame] = %.1f +/- %.1f (N = %d)' % (movie.dwell_mean, movie.dwell_std/(len(movie.dwells)**0.5), len(movie.dwells))
+        sp1.set_title(title)
         print(title)
                     
-#        sp2 = fig2.add_subplot(122) 
-#        hist_lifetime = sp2.hist(movie.dwells, bins='scott', normed=False, color='k', histtype='step', linewidth=2)
-#        sp2.set_yscale('log')
-#        sp2.semilogy(x_lifetime, y_mean, 'r', linewidth=2)
-#        title = 'Mean-Std ratio = %.2f' % (movie.dwell_mean / movie.dwell_std)
-#        sp2.set_title(title)
+        sp2 = fig2.add_subplot(122) 
+        hist_lifetime = sp2.hist(movie.dwells, bins='scott', normed=False, color='k', histtype='step', linewidth=2)
+        sp2.set_yscale('log')
+        sp2.semilogy(x_lifetime, y_mean, 'r', linewidth=2)
+        sp2.axis([0, 1.1*max(x_lifetime), 0.1, 2*max(y_mean)])
+        title = 'Mean-Std ratio = %.2f' % (movie.dwell_mean / movie.dwell_std)
+        sp2.set_title(title)
 
         fig2.savefig('Fig2.png')
         plt.close('all')
+
+        # Figure 3
+        fig3 = plt.figure(self.movie_name+' Peaks', figsize = (20, 10), dpi=300)   
+        row = 5
+        col = 4  
+        for i in range(row*col):        
+            sp = fig3.add_subplot(row, col, i+1)  
+            sp.plot(movie.I_peak[i], 'k-')
+            sp.axhline(y=0, color='b', linestyle='dashed', linewidth=1)
+            sp.axhline(y=1, color='b', linestyle='dashed', linewidth=1)
+            
+        fig3.savefig('Fig3.png')
+        plt.close('all')
+
+        # Figure 4   
+        fig4 = plt.figure(self.movie_name+' Corr', figsize = (20, 10), dpi=300)  
+        for i in range(row*col):        
+            sp = fig4.add_subplot(row, col, i+1)  
+            sp.plot(movie.corr[i], 'k-')    
+            sp.axhline(y=0, color='b', linestyle='dashed', linewidth=1) 
+
+        fig4.savefig('Fig4.png')
+        plt.close('all')
+
+        # Figure 5: Correlation with a single exponential
+        fig5 = plt.figure(self.movie_name+' meanCorr', figsize = (20, 10), dpi=300)         
+        corr = np.arange(1, self.n_corr+1)
+        tpf = self.tpf  
+
+        p1, pcov1 = curve_fit(exp1, corr, movie.corr_mean, p0=[0, movie.dwell_mean, 1], sigma=movie.corr_sem)  
+        x_fit = np.linspace(0, max(corr), 1000)
+        y_fit1 = exp1(x_fit, p1[0], p1[1], p1[2])     
+        scale1 = y_fit1[0]
+        offset1 = p1[0]
+        y_fit1 = (y_fit1 - offset1)/(scale1 - offset1)
+        movie.corr_mean1 = (movie.corr_mean - offset1)/(scale1 - offset1)    
+
+        sp1 = fig5.add_subplot(121)
+#        sp1.errorbar(corr, movie.corr_mean, yerr=movie.corr_sem, fmt='ko')
+        sp1.plot(tpf*corr, movie.corr_mean1, 'ko', mfc='none')        
+        sp1.plot(tpf*x_fit, y_fit1, 'r', linewidth=2)     
+        sp1.set_xlim([0, max(tpf*corr)])  
+        sp1.set_ylim([-0.1, 1])     
+        title = "Correlation time [s] = %.2f +/- %.2f (N = %d)" %(
+                tpf*p1[2], tpf*pcov1[2,2]**0.5, movie.n_peaks)    
+        sp1.set_title(title)
+        sp1.set_xlabel('Time [s]')
+        sp1.set_ylabel('Correlation [AU]')
+        print(title)
         
+        sp2 = fig5.add_subplot(122)
+        sp2.plot(corr, movie.corr_mean1, 'ko', mfc='none')
+        sp2.set_yscale('log')
+        sp2.semilogy(x_fit, y_fit1, 'r', linewidth=2)    
+        sp2.set_xlim([0, max(corr)])  
+        sp2.set_ylim([min(y_fit1)/10, 1])  
+        title = "Correlation time [frame] = %.1f +/- %.1f, Tpf [s] = %.2f" %(
+                p1[2], pcov1[2,2]**0.5, tpf)   
+        sp2.set_title(title) 
+        sp2.set_xlabel('Lag time [frame]')
+        sp2.set_ylabel('Correlation [AU]')
+        print(title)
+
+        fig5.savefig('Fig5.png')
+        plt.close('all')
+
+        # Figure 6: Correlation with a double exponential
+        fig6 = plt.figure(self.movie_name+' meanCorr', figsize = (20, 10), dpi=300)         
+
+        p2, pcov2 = curve_fit(exp2, corr, movie.corr_mean, p0=[0, 0.5, movie.dwell_mean/2, 0.5, movie.dwell_mean*2], sigma=movie.corr_sem)  
+        x_fit = np.linspace(0, max(corr), 1000)
+        y_fit2 = exp2(x_fit, p2[0], p2[1], p2[2], p2[3], p2[4])     
+        scale2 = y_fit2[0]
+        offset2 = p2[0]
+        y_fit2 = (y_fit2 - offset2)/(scale2 - offset2)
+        movie.corr_mean2 = (movie.corr_mean - offset2)/(scale2 - offset2)    
+
+        sp1 = fig6.add_subplot(121)
+#        sp1.errorbar(corr, movie.corr_mean, yerr=movie.corr_sem, fmt='ko')
+        sp1.plot(tpf*corr, movie.corr_mean2, 'ko', mfc='none')        
+        sp1.plot(tpf*x_fit, y_fit2, 'r', linewidth=2)   
+        sp1.set_xlim([0, max(tpf*corr)])  
+        sp1.set_ylim([-0.1, 1])   
+        title = "Correlation time [s] = %.2f +/- %.2f (%d %%), %.2f +/- %.2f (%d %%) (N = %d)" %(
+                tpf*p2[2], tpf*pcov2[2,2]**0.5, 100*p2[1]/(p2[1]+p2[3]), 
+                tpf*p2[4], tpf*pcov2[4,4]**0.5, 100*p2[3]/(p2[1]+p2[3]),
+                movie.n_peaks)    
+        sp1.set_title(title)
+        sp1.set_xlabel('Time [s]')
+        sp1.set_ylabel('Correlation [AU]')
+        print(title)
+        
+        sp2 = fig6.add_subplot(122)
+        sp2.plot(corr, movie.corr_mean2, 'ko', mfc='none')
+        sp2.set_yscale('log')
+        sp2.semilogy(x_fit, y_fit2, 'r', linewidth=2)  
+        sp2.set_xlim([0, max(corr)])  
+        sp2.set_ylim([min(y_fit2)/2, 1])     
+        title = "Correlation time [frame] = %.1f +/- %.1f (%d %%), %.1f +/- %.1f (%d %%), Tpf [s] = %.2f" %(
+                p2[2], pcov2[2,2]**0.5, 100*p2[1]/(p2[1]+p2[3]), 
+                p2[4], pcov2[4,4]**0.5, 100*p2[3]/(p2[1]+p2[3]),
+                tpf)   
+        sp2.set_title(title) 
+        sp2.set_xlabel('Lag time [frame]')
+        sp2.set_ylabel('Correlation [AU]')
+        print(title)
+
+        fig6.savefig('Fig6.png')
+        plt.close('all')
+                                                                                                                                  
         # Figure for individual traces    
         save_trace = input('Save individual traces [y/n]? ')
-        if save_trace == 'y':        
+        if save_trace == 'y':    
+            percent = int(input('How much percent [1-100]? '))    
+            if percent < 1:
+                percent = 1
+            if percent > 100:
+                percent = 100
+                
             i_fig = 1               
             n_col = 4
             n_row = 5
@@ -261,7 +426,9 @@ class Data(object):
             else:
                 os.makedirs(directory)
                 
-            for j in range(n_mol):
+            n_fig = int(n_mol*percent/100)
+                
+            for j in range(n_fig):
                 k = j%(n_col*n_row)
                 if k == 0:                      
                     fig = plt.figure(i_fig, figsize = (25, 15), dpi=300)
@@ -271,18 +438,15 @@ class Data(object):
                 sp.plot(movie.frame, movie.mols[j].I_s, 'b', linewidth=1, markersize=3)
                 sp.plot(movie.frame, movie.mols[j].I_fit, 'r', linewidth=2, markersize=3)
                 sp.axhline(y=0, color='k', linestyle='dashed', linewidth=1)
-                sp.axhline(y=self.SNR_min, color='r', linestyle='dotted', linewidth=1)
+                sp.axhline(y=self.SNR_min*movie.mols[j].noise, color='r', linestyle='dotted', linewidth=1)
                 title_sp = '(%d, %d) (noise = %.1f)' % (movie.mols[j].row, movie.mols[j].col, movie.mols[j].noise)
                 sp.set_title(title_sp)
                 fig.subplots_adjust(wspace=0.3, hspace=0.5)
-                if (k == n_col*n_row-1) | (j == n_mol-1):
-                    print("%d (%d %%)" % (i_fig-1, (j/n_mol)*100))
-                    fig.savefig(directory+"\\%d.png" % (i_fig-1)) 
+                if (k == n_col*n_row-1) | (j == n_fig-1):
+                    print("Save Fig %d (%d %%)" % (i_fig-1, (j/n_mol)*100+1))
+                    fig.savefig(directory+"\\Fig%d.png" % (i_fig-1)) 
                     fig.clf()
                     plt.close('all')   
-                                                                                                                                  
-        plt.show()
-
 
               
 # Start  
