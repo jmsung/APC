@@ -8,20 +8,21 @@ from scipy.optimize import curve_fit
 
 np.random.seed()
 
-n_mol = 500
-n_frame = 300
+n_mol = 100
+n_frame = 100
 n_delay = 50
-corr = np.arange(1, n_frame)
+n_corr = n_frame-1
+corr = np.arange(1, n_corr)
 
 t_b = 10
-t_u = 20
+t_u = 5
 t_t = 1/(1/t_b+1/t_u)
-noise = 0.1 # percent noise
-blink = 0.01 # percent per frame
-nonspecific = 0.05 # percent per frame
+noise = 0.2 # percent noise
+blink = 0 # percent per frame
+nonspecific = 0 # percent per frame
 
 
-def exp(x, a, b, c):
+def exp1(x, a, b, c):
     return a + b * np.exp(-x/c) 
 
 def exp2(x, a, b, c, d, e):
@@ -46,8 +47,6 @@ class Data(object):
                         I[i][j] = 0
                 if rand() < nonspecific:
                     I[i][j] = I[i][j] + 1   
-                    if j > 0:
-                        I[i][j-1] = I[i][j-1] + 1
                                                 
             I[i] = I[i] + noise*randn(n_frame+n_delay)
             
@@ -61,7 +60,7 @@ class Data(object):
             
 
     def analyze(self):
-        self.corr_b = np.zeros((n_mol, n_frame-1))
+        self.corr_b = np.zeros((n_mol, n_corr-1))
         for i in range(n_mol):
             for j in corr:
                 corr_b = []
@@ -89,29 +88,71 @@ class Data(object):
             sp.plot(self.corr_b[i], 'k-')    
             sp.axhline(y=0, color='b', linestyle='dashed', linewidth=1) 
             
-        fig3 = plt.figure(3)        
-        sp1 = fig3.add_subplot(121)
-        p1, pcov1 = curve_fit(exp, corr, self.corr_b_mean, p0=[0, 1, 10], sigma=self.corr_b_sem)  
+        # Figure 3. Correlation - Full range
+        fig3 = plt.figure(3)  
+        p0 = [0, 1, 10]
+        p1, pcov1 = curve_fit(exp1, corr, self.corr_b_mean, p0, self.corr_b_sem) 
         x_fit = np.linspace(0,max(corr),1000)
-        y_fit = exp(x_fit, p1[0], p1[1], p1[2])         
+        y_fit1 = exp1(x_fit, p1[0], p1[1], p1[2])        
+        scale1 = y_fit1[0]
+        offset1 = p1[0]
+        y_fit1 = (y_fit1 - offset1)/(scale1 - offset1)
+        self.corr_b_mean1 = (self.corr_b_mean - offset1)/(scale1 - offset1)    
 
-        sp1.errorbar(corr, self.corr_b_mean, yerr=self.corr_b_sem, fmt='ko')
-        sp1.plot(x_fit, y_fit, 'r', linewidth=2)        
-        title = "Dwell time = %.1f (given), %.1f +/- %.1f (est)" % (t_t, p1[2], pcov1[2,2]**0.5)
+        sp1 = fig3.add_subplot(121)
+        sp1.plot(corr, self.corr_b_mean1, 'ko', mfc='none')
+        sp1.plot(x_fit, y_fit1, 'r', linewidth=2)     
+        sp1.set_xlim([0, max(corr)])  
+        sp1.set_ylim([-0.1, 1])     
+        title = "[Given] t_b = %.1f, t_u = %.1f, t_tot = %.1f " % (t_b, t_u, t_t)
         sp1.set_title(title)
+        sp1.set_xlabel('Lag time [Frame]')
+        sp1.set_ylabel('Correlation [AU]')
         
         sp2 = fig3.add_subplot(122)
-        lim = 5*p1[2]
-        index = corr<lim
-        p2, pcov2 = curve_fit(exp2, corr[index], self.corr_b_mean[index], p0=[p1[0], p1[1], p1[2], p1[1]/2, p1[2]/5], sigma=self.corr_b_sem[index])    
-        x_fit = np.linspace(0,lim,1000)
-        y_fit = exp2(x_fit, p2[0], p2[1], p2[2], p2[3], p2[4])
-
-        sp2.errorbar(corr[corr<lim], self.corr_b_mean[corr<lim], yerr=self.corr_b_sem[corr<lim], fmt='ko')
-        sp2.plot(x_fit, y_fit, 'r', linewidth=2)        
-        title = "Dwell time = %.1f (given), %.1f +/- %.1f (est)" % (t_t, p2[2], (pcov2[2,2])**0.5)
+        sp2.plot(corr, self.corr_b_mean1, 'ko', mfc='none')
+        sp2.set_yscale('log')
+        sp2.semilogy(x_fit, y_fit1, 'r', linewidth=2)    
+        sp2.set_xlim([0, max(corr)])  
+        sp2.set_ylim([min(y_fit1)/10, 1])          
+        title = "[Estimate] t_est = %.1f +/- %.1f" % (p1[2], pcov1[2,2]**0.5)
         sp2.set_title(title)
-                 
+        sp2.set_xlabel('Lag time [frame]')
+        sp2.set_ylabel('Correlation [AU]')
+  
+        # Figure 4. Correlation - Short range
+        fig4 = plt.figure(4)  
+        p0 = [p1[0], p1[1], p1[2]]
+        lim = corr < p1[2]*2
+        p1, pcov1 = curve_fit(exp1, corr[lim], self.corr_b_mean[lim], p0, self.corr_b_sem[lim]) 
+        x_fit = np.linspace(0,max(corr[lim]),1000)
+        y_fit1 = exp1(x_fit, p1[0], p1[1], p1[2])        
+        scale1 = y_fit1[0]
+        offset1 = p1[0]
+        y_fit1 = (y_fit1 - offset1)/(scale1 - offset1)
+        self.corr_b_mean1 = (self.corr_b_mean - offset1)/(scale1 - offset1)    
+
+        sp1 = fig4.add_subplot(121)
+        sp1.plot(corr[lim], self.corr_b_mean1[lim], 'ko', mfc='none')
+        sp1.plot(x_fit, y_fit1, 'r', linewidth=2)     
+        sp1.set_xlim([0, max(corr[lim])])  
+        sp1.set_ylim([0, 1])     
+        title = "[Given] t_b = %.1f, t_u = %.1f, t_tot = %.1f " % (t_b, t_u, t_t)
+        sp1.set_title(title)
+        sp1.set_xlabel('Lag time [Frame]')
+        sp1.set_ylabel('Correlation [AU]')
+        
+        sp2 = fig4.add_subplot(122)
+        sp2.plot(corr[lim], self.corr_b_mean1[lim], 'ko', mfc='none')
+        sp2.set_yscale('log')
+        sp2.semilogy(x_fit, y_fit1, 'r', linewidth=2)    
+        sp2.set_xlim([0, max(corr[lim])])  
+        sp2.set_ylim([min(y_fit1)/2, 1])          
+        title = "[Estimate] t_est = %.1f +/- %.1f" % (p1[2], pcov1[2,2]**0.5)
+        sp2.set_title(title)
+        sp2.set_xlabel('Lag time [frame]')
+        sp2.set_ylabel('Correlation [AU]')                 
+                                               
         plt.show()
       
 # Start  
