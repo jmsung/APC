@@ -318,7 +318,7 @@ class Data(object):
         sp3.set_title(title)      
         
         fig1.savefig('Fig1_Image.png')   
-        plt.close('all')
+#        plt.close('all')
    
         #######################################################################
         # Figure 2 - Histogram: Single Exp
@@ -347,7 +347,7 @@ class Data(object):
         sp2.set_title(title)
 
         fig2.savefig('Fig2_HistExp1.png')
-        plt.close('all')
+#        plt.close('all')
 
         #######################################################################
 #        # Figure 3 - Histogram: Double Exp
@@ -369,7 +369,7 @@ class Data(object):
             sp.axhline(y=1, color='b', linestyle='dashed', linewidth=1)
             
         fig4.savefig('Fig4_PeakIntensity.png')
-        plt.close('all')
+#        plt.close('all')
 
         #######################################################################
         # Figure 5   
@@ -380,7 +380,7 @@ class Data(object):
             sp.axhline(y=0, color='b', linestyle='dashed', linewidth=1) 
 
         fig5.savefig('Fig5_IndivCorr.png')
-        plt.close('all')
+#        plt.close('all')
 
         #######################################################################                                                                                                                                                                                                                                                                   
         # Figure for individual traces    
@@ -422,8 +422,8 @@ class Data(object):
                 if (k == n_col*n_row-1) | (j == n_fig-1):
                     print("Save Fig %d (%d %%)" % (i_fig-1, (j/n_mol)*100+1))
                     fig.savefig(directory+"\\Fig%d.png" % (i_fig-1)) 
-                    fig.clf()
-                    plt.close('all')   
+#                    fig.clf()
+#                    plt.close('all')   
 
         #######################################################################
         # Figure 6: Correlation with a single exponential
@@ -464,7 +464,7 @@ class Data(object):
         sp2.set_ylabel('Correlation [AU]')
         
         fig6.savefig('Fig6_CorrExp1.png')
-        plt.close('all')
+#        plt.close('all')
 
         #######################################################################
         # Figure 7: Correlation with a double exponential
@@ -507,11 +507,23 @@ class Data(object):
         sp2.set_ylabel('Correlation [AU]')
 
         fig7.savefig('Fig7_CorrExp2.png')
-        plt.close('all')
+#        plt.close('all')
+          
+def main():
+#    plt.close('all')
+    data = Data()
+    data.analysis()
+    data.plot()
 
-              
-# Start  
-plt.close('all')
-data = Data()
-data.analysis()
-data.plot()
+if __name__ == "__main__":
+    main()
+
+# Automatic vs defined bin
+# return bin size
+# MLE 2 exp
+# Select min or max frame
+# MLE error
+# There are two errors to fix
+# What if there are two reaction paths. Check in theory and simulation
+
+
