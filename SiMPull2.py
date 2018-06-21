@@ -53,10 +53,10 @@ def exp2(x, a, b, c, d, e):
 
 # Exponential function with cutoff at x = b 
 def Exp_cutoff(a, b, x):
-    return (np.exp(-(x-b)/a)/a) * (0.5*(np.sign(x-b)+1))+1e-100
+    return (np.exp(-(x-b)/a)/a) * (0.5*(np.sign(x-b)+1)) + 1e-100
 
 def Exp2_cutoff(a, b, c, d, x):
-    return (c*(np.exp(-(x-d)/a)/a) + (1-c)*(np.exp(-(x-d)/b)/b)) * (0.5*(np.sign(x-d)+1))+1e-100   
+    return (c*(np.exp(-(x-d)/a)/a) + (1-c)*(np.exp(-(x-d)/b)/b)) * (0.5*(np.sign(x-d)+1)) + 1e-100   
 
 # LogLikelihood 
 def LL2(param, d, x):      
@@ -319,7 +319,7 @@ class Data(object):
         sp3.set_title(title)      
         
         fig1.savefig('Fig1_Image.png')   
-
+        plt.close(fig1)
 
     def plot_fig2(self):    
         # Figure 2 - Histogram: Single Exp           
@@ -351,14 +351,13 @@ class Data(object):
         sp2.set_title(title)
 
         fig2.savefig('Fig2_HistExp1.png')
-
+        plt.close(fig2)
         
     def plot_fig3(self):         
         # Figure 3 - Histogram: Double Exp
-        fig3 = plt.figure(3, figsize = (20, 10), dpi=300)  
-        
+        fig3 = plt.figure(3, figsize = (20, 10), dpi=300)   
         fig3.savefig('Fig3_HistExp2.png')
-
+        plt.close(fig3)
 
     def plot_fig4(self):  
         # Figure 4: Peak intensity
@@ -369,9 +368,9 @@ class Data(object):
             sp = fig4.add_subplot(self.row, self.col, i+1)  
             sp.plot(self.movie.I_peak[i], 'k-')
             sp.axhline(y=0, color='b', linestyle='dashed', linewidth=1)
-            sp.axhline(y=1, color='b', linestyle='dashed', linewidth=1)
-          
+            sp.axhline(y=1, color='b', linestyle='dashed', linewidth=1)  
         fig4.savefig('Fig4_PeakIntensity.png')
+        plt.close(fig4)
                 
     def plot_fig5(self):  
         # Figure 5: Individual correlation   
@@ -382,6 +381,7 @@ class Data(object):
             sp.axhline(y=0, color='b', linestyle='dashed', linewidth=1) 
 
         fig5.savefig('Fig5_IndivCorr.png')  
+        plt.close(fig5)
         
     def plot_fig6(self):  
         # Figure 6: Correlation with a single exponential
@@ -422,6 +422,7 @@ class Data(object):
         sp2.set_ylabel('Correlation [AU]')
               
         fig6.savefig('Fig6_CorrExp1.png')
+        plt.close(fig6)
                 
     def plot_fig7(self):  
         # Figure 7: Correlation with a double exponential
@@ -468,6 +469,7 @@ class Data(object):
         sp2.set_ylabel('Correlation [AU]')
 
         fig7.savefig('Fig7_CorrExp2.png')
+        plt.close(fig7)
              
     def plot_traces(self):                                                                                                                                                                                                                                                                  
         # Figure for individual traces    
@@ -530,18 +532,13 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Crashing issue
-
+# To do
 # Automatic cutoff [mean/4, mean*10]
-# MLE 2 exp
-
-# MLE error
+# MLE 2 exp 
+# MLE error 
 # There are two errors to fix
-
 # Drift correction from spatial correlation
-
 # Automatic correlation range
-
 # What if there are two reaction paths. Check in theory and simulation
 
 
