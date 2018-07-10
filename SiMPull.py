@@ -189,6 +189,16 @@ class Movie(object):
         for i in range(self.n_frame): 
             movie.seek(i) # Move to i-th frame
             self.I[i,] = np.array(movie, dtype=int)
+            
+    def drift(self):
+        # Binary filter
+        # Kernal with the 0th frame
+        # Correlation btw 0th and ith
+        # shift
+        for i in range(self.n_frame):
+            pass
+
+
         
     def offset(self):
         I_min = np.min(self.I, axis=0)
@@ -289,6 +299,8 @@ class Data(object):
                                                                                                                                                                                               
     def analysis(self):
         movie = self.movie
+        if input('Drift correction [y/n]?') == 'y':
+            movie.drift()
         movie.I_min = np.min(movie.I, axis=0)
         movie.offset() # Pixel-wise bg subtraction, from the minimum intensity of movie 
         movie.I_max = np.max(movie.I, axis=0)
@@ -521,7 +533,7 @@ class Data(object):
         self.plot_fig4()
         self.plot_fig5()
         self.plot_fig6()
-        self.plot_fig7()   
+#        self.plot_fig7()   
         self.plot_traces()    
              
 def main():
@@ -533,6 +545,9 @@ if __name__ == "__main__":
     main()
 
 # To do
+# Use as a module > Analyze multiple data and combine (especially for both fast and slow kinetics)
+# Exclude multimer from the middle range
+# Mac vs PC
 # Automatic cutoff [mean/4, mean*10]
 # MLE 2 exp 
 # MLE error 
