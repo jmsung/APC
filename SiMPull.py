@@ -29,6 +29,8 @@ from skimage.feature import peak_local_max
 from scipy.optimize import curve_fit
 import time
 from scipy.optimize import minimize
+from skimage import filters
+import platform
 
 
 noise_cutoff = 0.5
@@ -94,8 +96,8 @@ class Mol(object):
         I = I - np.min(I)
         I = I/np.max(I)
 
-        bg_u = np.mean(I[I < 0.5])
-        bg_b = np.mean(I[I > 0.5])
+        bg_u = np.mean(I[I < 0.4])
+        bg_b = np.mean(I[I > 0.6])
         self.I_frame = (I - bg_u)/(bg_b - bg_u) 
                
     def find_noise(self):
@@ -175,12 +177,12 @@ class Mol(object):
 class Movie(object):
     def __init__(self, movie_name, data_path):
         self.movie_name = movie_name
-        self.movie_path = data_path + '\\' + movie_name   
+        self.movie_path = os.path.join(data_path, movie_name)   
         movie = Image.open(self.movie_path)
         self.n_frame = movie.n_frames
-        print('Number of frames = %d' %(self.n_frame))
         self.n_row = movie.size[1]
         self.n_col = movie.size[0]
+        print('[frame, row, col] = [%d, %d, %d]' %(self.n_frame, self.n_row, self.n_col))        
         self.n_avg = 5
         self.frame = np.arange(self.n_frame)
         self.frame_avg = running_avg(self.frame, self.n_avg)
@@ -190,16 +192,60 @@ class Movie(object):
             movie.seek(i) # Move to i-th frame
             self.I[i,] = np.array(movie, dtype=int)
             
+    def crop(self, I, x, y, s):
+        hs = int(s/2)
+        I0 = I[x-hs:x+hs+1, y-hs:y+hs+1]
+        val = filters.threshold_otsu(I0)
+        mask = I0 > val
+        return mask
+        
+                      
     def drift(self):
-        # Binary filter
-        # Kernal with the 0th frame
-        # Correlation btw 0th and ith
-        # shift
-        for i in range(self.n_frame):
-            pass
+        r = 20  
+        size = min(self.n_row, self.n_row) - (2*r+10)
 
+        I0 = self.I[0,] # 0th frame 
+        cx = int(self.n_row/2)
+        cy = int(self.n_col/2) 
+        I0s = self.crop(I0, cx, cy, size)     
+        self.I0s = I0s
+     
+        self.drift = np.zeros((self.n_frame, 2*r+1, 2*r+1), dtype=float)  
+     
+        self.drift_x = []
+        self.drift_y = []
+
+        for i in range(self.n_frame):  
+            print(i)
+            I1 = self.I[i,] # ith frame  
+            for j in range(-r, r+1):
+                for k in range(-r, r+1):
+                    I1s = self.crop(I1, cx+j, cy+k, size)
+                    corr = np.sum(I0s*I1s)
+                    self.drift[i, j+r, k+r] = corr
+                                        
+            self.drift[i,] = self.drift[i,] - self.drift[i,].min()
+            self.drift[i,] = self.drift[i,]/self.drift[i,].max()
+
+            dr = np.argwhere(self.drift[i,] == 1)
+            self.drift_x += [dr[0][1]-r]
+            self.drift_y += [dr[0][0]-r]
 
         
+    def drift_correct(self):
+        I = np.zeros((self.n_frame, self.n_row, self.n_col), dtype=int)
+        dx = self.drift_x
+        dy = self.drift_y
+        
+        for i in range(self.n_frame):  
+            for j in range(self.n_row):
+                if j-dy[i] >= 0 and j-dy[i] < self.n_row: 
+                    for k in range(self.n_col):
+                        if k-dx[i] >= 0 and k-dx[i] < self.n_col:                    
+                            I[i, j-dy[i], k-dx[i]] = self.I[i, j, k]                                  
+        self.I = I
+            
+            
     def offset(self):
         I_min = np.min(self.I, axis=0)
         for i in range(self.n_frame):
@@ -278,7 +324,11 @@ class Movie(object):
 class Data(object):
     def __init__(self):
         self.data_path = os.getcwd()
-        path_split = self.data_path.split('\\')      
+        self.os = platform.system()
+        if self.os == 'Windows':
+            path_split = self.data_path.split('\\')    
+        else:
+            path_split = self.data_path.split('/')   
         self.data_name = path_split[len(path_split)-1]      
         self.file_list = os.listdir(self.data_path) 
         for i in range(len(self.file_list)):
@@ -296,11 +346,14 @@ class Data(object):
         self.auto_bin = input('Automatic bin size [y/n]? ')
         if self.auto_bin == 'n':
             self.bin_size = float(input('Bin size? ')) 
+        self.drift_corr = input('Drift correction [y/n]? ')
                                                                                                                                                                                               
     def analysis(self):
         movie = self.movie
-        if input('Drift correction [y/n]?') == 'y':
+        if self.drift_corr == 'y':
             movie.drift()
+            movie.drift_correct()
+            
         movie.I_min = np.min(movie.I, axis=0)
         movie.offset() # Pixel-wise bg subtraction, from the minimum intensity of movie 
         movie.I_max = np.max(movie.I, axis=0)
@@ -496,12 +549,13 @@ class Data(object):
             i_fig = 1               
             n_col = 3
             n_row = 3
-            directory = self.data_path+'\\Figures'
-            if os.path.exists(directory):
-                shutil.rmtree(directory)
-                os.makedirs(directory)
+            fig_path = os.path.join(self.data_path, "Figures")
+            if os.path.exists(fig_path):
+                shutil.rmtree(fig_path)
+                os.makedirs(fig_path)
             else:
-                os.makedirs(directory)
+                os.makedirs(fig_path)
+            os.chdir(fig_path)
                 
             n_fig = int(len(self.movie.mols)*percent/100)
                 
@@ -521,19 +575,52 @@ class Data(object):
                 fig.subplots_adjust(wspace=0.3, hspace=0.5)
                 if (k == n_col*n_row-1) | (j == n_fig-1):
                     print("Save Fig %d (%d %%)" % (i_fig, (j/len(self.movie.mols))*100+1))
-                    fig.savefig(directory+"\\Fig%d.png" % (i_fig)) 
+                    fig.savefig("Fig%d.png" % (i_fig)) 
                     fig.clf()
                     i_fig += 1
 
+            os.chdir(self.data_path)
+                    
+    def plot_fig8(self):
+        fig8 = plt.figure(1, figsize = (20, 10), dpi=300)    
+        fig8.clf()
+        movie = self.movie
+                
+        sp1 = fig8.add_subplot(221)  
+        im1 = sp1.imshow(movie.I0s, cmap=cm.gray)
+        plt.colorbar(im1)
+        sp1.set_title('Kernel (Frame = 0)')
+
+        frame = movie.n_frame -1
+        sp2 = fig8.add_subplot(222)  
+        r = len(movie.drift[0])
+        im2 = sp2.imshow(movie.drift[frame], cmap=cm.gray, extent = [-r, r, r, -r])
+        plt.colorbar(im2)
+        sp2.set_title('Correlation (Frame = %d)' %(frame))
+
+        sp3 = fig8.add_subplot(223)
+        sp3.plot(movie.drift_x)
+        sp3.set_title('Drift in X')  
+
+        sp4 = fig8.add_subplot(224)
+        sp4.plot(movie.drift_y)
+        sp4.set_title('Drift in Y') 
+
+        fig8.savefig('Fig8_Drift.png')   
+        plt.close(fig8)
+            
+                        
     def plot(self):
         print("\nPlotting figures...")
         self.plot_fig1()
         self.plot_fig2()
-        self.plot_fig3()
-        self.plot_fig4()
-        self.plot_fig5()
-        self.plot_fig6()
+#        self.plot_fig3()
+#        self.plot_fig4()
+#        self.plot_fig5()
+#        self.plot_fig6()
 #        self.plot_fig7()   
+        if self.drift_corr == 'y':
+            self.plot_fig8()
         self.plot_traces()    
              
 def main():
@@ -545,14 +632,16 @@ if __name__ == "__main__":
     main()
 
 # To do
+
+# Use binary filtered data for overall analysis?
+
 # Use as a module > Analyze multiple data and combine (especially for both fast and slow kinetics)
 # Exclude multimer from the middle range
-# Mac vs PC
+
 # Automatic cutoff [mean/4, mean*10]
 # MLE 2 exp 
 # MLE error 
-# There are two errors to fix
-# Drift correction from spatial correlation
+
 # Automatic correlation range
 # What if there are two reaction paths. Check in theory and simulation
 
