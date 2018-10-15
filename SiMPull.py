@@ -337,7 +337,7 @@ class Data(object):
                 print('Movie name = ', self.movie_name)
         self.movie = Movie(self.movie_name, self.data_path)
         self.tpf = float(input('Time per frame [s]? '))
-        self.n_corr = int(input('How many frames for correlation [100]? '))
+#        self.n_corr = int(input('How many frames for correlation [100]? '))
         self.spot_size = int(input('Spot size in pixel [3]? '))
         #self.SNR_min = int(input('Signal to noise cutoff [10]? '))
         self.SNR_min = 10
@@ -362,7 +362,7 @@ class Data(object):
         movie.find_dwelltime()
         movie.dwell_mean = np.mean(movie.dwells)-min(movie.dwells)
         movie.dwell_std = np.std(movie.dwells)
-        movie.correlation(self.spot_size, self.n_corr)
+#        movie.correlation(self.spot_size, self.n_corr)
                                                                                                                                                         
     def plot_fig1(self):    
         # Figure 1 - Image                                                    
@@ -599,11 +599,11 @@ class Data(object):
         sp2.set_title('Correlation (Frame = %d)' %(frame))
 
         sp3 = fig8.add_subplot(223)
-        sp3.plot(movie.drift_x)
+        sp3.plot(movie.drift_x, 'k')
         sp3.set_title('Drift in X')  
 
         sp4 = fig8.add_subplot(224)
-        sp4.plot(movie.drift_y)
+        sp4.plot(movie.drift_y, 'k')
         sp4.set_title('Drift in Y') 
 
         fig8.savefig('Fig8_Drift.png')   
