@@ -21,7 +21,7 @@ import time
 
 
 # User parameters
-n_sample = 200
+n_sample = 2
 n_frame = 200
 SNR = 10
 time_bound = 10
@@ -253,29 +253,29 @@ class Data:
         print("Time bound (MLE) = %.1f (%.1f %%)" %(self.tb_MLE, error_tb)) 
         print("Time unbound (MLE) = %.1f (%.1f %%) \n" %(self.tu_MLE, error_tu)) 
 
-        # ----------------------------------------------------------------------
-        # HMM prediction with concatenated data   
-        self.remodel.fit(self.X_conc) # Fit (train) to find the parameters         
-        Z_predict_conc = self.remodel.predict(self.X_conc) # Predict the most likely trajectory
-        self.Z_predict_conc = Z_predict_conc.reshape(self.n_frame*self.n_sample, 1)          
-        self.converged_conc = self.remodel.monitor_.converged # Check the convergence
-        self.tp_conc = self.remodel.transmat_ # Transition probability
+#        # ----------------------------------------------------------------------
+#        # HMM prediction with concatenated data   
+#        self.remodel.fit(self.X_conc) # Fit (train) to find the parameters         
+#        Z_predict_conc = self.remodel.predict(self.X_conc) # Predict the most likely trajectory
+#        self.Z_predict_conc = Z_predict_conc.reshape(self.n_frame*self.n_sample, 1)          
+#        self.converged_conc = self.remodel.monitor_.converged # Check the convergence
+#        self.tp_conc = self.remodel.transmat_ # Transition probability
 
-        # Reorder state number such that X[Z=0] < X[Z=1] 
-        if self.X_conc[Z_predict_conc == 0].mean() > self.X_conc[Z_predict_conc == 1].mean():
-            self.Z_predict_conc = 1 - self.Z_predict_conc
-            self.tp_conc = np.array([[self.tp_conc[1][1], self.tp_conc[1][0]],
-                                     [self.tp_conc[0][1], self.tp_conc[0][0]]])
-
-        self.tp_bu_conc = self.tp_conc[1][0] + 1/n_frame # Transition prob from unbound to bound
-        self.tp_ub_conc = self.tp_conc[0][1] + 1/n_frame # Transition prob from bound to unbound
-        self.tb_HMM_conc = 1/self.tp_bu_conc # Bound time
-        self.tu_HMM_conc = 1/self.tp_ub_conc # Unbound time
-        error_tb = 100*(self.tb_HMM_conc/self.time_bound-1)
-        error_tu = 100*(self.tu_HMM_conc/self.time_unbound-1)      
-        print("HMM_concatenated is %s" %(["not converged.", "converged."][int(self.converged_conc)]))
-        print("Time bound (HMM, conc) = %.1f (%.1f %%)" %(self.tb_HMM_conc, error_tb))
-        print("Time unbound (HMM, conc) = %.1f (%.1f %%)\n" %(self.tu_HMM_conc, error_tu))
+#        # Reorder state number such that X[Z=0] < X[Z=1] 
+#        if self.X_conc[Z_predict_conc == 0].mean() > self.X_conc[Z_predict_conc == 1].mean():
+#            self.Z_predict_conc = 1 - self.Z_predict_conc
+#            self.tp_conc = np.array([[self.tp_conc[1][1], self.tp_conc[1][0]],
+#                                     [self.tp_conc[0][1], self.tp_conc[0][0]]])#
+#
+#        self.tp_bu_conc = self.tp_conc[1][0] + 1/n_frame # Transition prob from unbound to bound
+#        self.tp_ub_conc = self.tp_conc[0][1] + 1/n_frame # Transition prob from bound to unbound
+#        self.tb_HMM_conc = 1/self.tp_bu_conc # Bound time
+#        self.tu_HMM_conc = 1/self.tp_ub_conc # Unbound time
+#        error_tb = 100*(self.tb_HMM_conc/self.time_bound-1)
+#        error_tu = 100*(self.tu_HMM_conc/self.time_unbound-1)      
+#        print("HMM_concatenated is %s" %(["not converged.", "converged."][int(self.converged_conc)]))
+#        print("Time bound (HMM, conc) = %.1f (%.1f %%)" %(self.tb_HMM_conc, error_tb))
+#        print("Time unbound (HMM, conc) = %.1f (%.1f %%)\n" %(self.tu_HMM_conc, error_tu))
 
 
     def threshold(self):
@@ -352,7 +352,7 @@ class Data:
 
         fig = plt.figure('trace', clear=True) 
         
-        for i in range(8):
+        for i in range(1):
             # Mean values for true and predicted states
             X_true = np.zeros((n_frame,1))
             X_predict = np.zeros((n_frame,1))        
@@ -517,17 +517,17 @@ def main(n_sample, n_frame, SNR, time_bound, time_unbound):
     data.threshold()
     
     # PDF analysis
-    data.analyze_pdf()
+#    data.analyze_pdf()
     
     # ICDF analysis
-    data.analyze_icdf()
+#    data.analyze_icdf()
     
     # Plot the result
     data.plot_trace()
-    data.plot_cluster()
+#    data.plot_cluster()
     data.plot_HMM()     
     data.plot_pdf()
-    data.plot_icdf()    
+#    data.plot_icdf()    
        
     print("Calculation time = %d (s)" %(time.time()-start_time))
     
