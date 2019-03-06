@@ -21,11 +21,11 @@ import time
 
 
 # User parameters
-n_sample = 200
-n_frame = 200
-SNR = 10
-time_bound = 10
-time_unbound = 20
+n_sample = 1000
+n_frame = 100
+SNR = 50
+time_bound = 5
+time_unbound = 10
 
 print("Number of sample = %d" %(n_sample))
 print("Number of frame = %d" %(n_frame))
@@ -113,7 +113,7 @@ def get_dwell(X):
     t_bu = np.array(t_bu)
     
     if t_ub[0] < t_bu[0]: # if binding starts first 
-        t_b = t_bu - t_ub[:len(t_bu)]
+        t_b = t_bu - t_ub[:len(t_bu)] 
         if len(t_ub) > 1:
             t_u = t_ub[1:] - t_bu[:len(t_ub[1:])]
         else: 
@@ -139,12 +139,12 @@ class Data:
 
 
     # Build a HMM model and simulate n_sample traces
-    def generate(self):       
+    def generate_HMM(self):       
         # Build an HMM instance and set parameters
         self.model = hmm.GaussianHMM(n_components=2, covariance_type="full")
 
         # The transition probability matrix
-        tp_ub = 1/self.time_unbound
+        tp_ub = 1/(self.time_unbound)
         tp_uu = 1 - tp_ub
         tp_bu = 1/self.time_bound
         tp_bb = 1 - tp_bu
@@ -156,20 +156,40 @@ class Data:
         self.model.means_ = np.array([[0], [1]])
         self.model.covars_ = np.tile(np.identity(1), (2, 1, 1)) / self.SNR**2      
         
-        # Generate list of n_samples and concatenate them
+        # Generate list of n_samples
         self.X = [None] * self.n_sample
         self.Z_true = [None] * self.n_sample
-        self.X_conc = np.empty(shape=(0, 1)) 
-        self.Z_true_conc = np.empty(shape=(0, 1)) 
         for i in range(self.n_sample):
             self.X[i], Z = self.model.sample(self.n_frame)
             self.Z_true[i] = Z.reshape(self.n_frame, 1)            
-            self.X_conc = np.concatenate((self.X_conc, self.X[i]), axis=0)
-            self.Z_true_conc = np.concatenate((self.Z_true_conc, self.Z_true[i]), axis=0)
 
+    # Generate n_sample of n_frame traces based on just probability
+    def generate(self):
+                        
+        # The transition probability 
+        tp_ub = 1/(self.time_unbound)
+        tp_bu = 1/(self.time_bound)        
+        
+        # Generate list of n_samples
+        self.X = [None] * self.n_sample
+        self.Z_true = [None] * self.n_sample
+        
+        for i in range(self.n_sample):
+            Z = np.zeros((self.n_frame, 1))
+            Z[0] = np.random.randint(2) # Initial state [0 or 1]
+            for j in range(self.n_frame-1):
+                if Z[j] == 0: # if the previous state is 0
+                    if np.random.rand() < tp_ub:
+                        Z[j+1] = 1
+                else: # if the previous state is 1
+                    if np.random.rand() > tp_bu:
+                        Z[j+1] = 1
+            
+            self.Z_true[i] = Z
+            self.X[i] = Z + np.random.randn(self.n_frame, 1)/self.SNR/2**0.5
 
     # HMM prediction       
-    def predict(self):    
+    def predict_HMM(self):    
         # Set a new model for traidning
         self.remodel = hmm.GaussianHMM(n_components=2, covariance_type="full", n_iter=100)        
         
@@ -227,12 +247,12 @@ class Data:
             self.tu_HMM[i] = 1/self.tp_ub[i] # Unbound time
       
         # Check the convergence
-        print("%.1f %% converged." %(sum([int(i) for i in self.converged])/self.n_sample*100))
+#        print("%.1f %% converged." %(sum([int(i) for i in self.converged])/self.n_sample*100))
 
         # Label only good data
-        cond1 = np.array(self.tb_HMM) <= n_frame*0.5
+        cond1 = np.array(self.tb_HMM) <= n_frame*0.8
 #        cond1 = ~outliers(self.tb_HMM)
-        cond2 = np.array(self.tu_HMM) <= n_frame*0.5  
+        cond2 = np.array(self.tu_HMM) <= n_frame*0.8  
 #        cond2 = ~outliers(self.tu_HMM)
         cond3 = ~outliers(self.SNR)
         self.good_data = cond1 & cond2 & cond3
@@ -240,7 +260,10 @@ class Data:
         # Log transition probability
         self.log_tp_ub = np.log10(np.array(self.tp_ub[self.good_data]))
         self.log_tp_bu = np.log10(np.array(self.tp_bu[self.good_data]))              
-        
+   
+#        self.log_tp_ub = np.log10(np.array(self.tp_ub))
+#        self.log_tp_bu = np.log10(np.array(self.tp_bu))  
+     
         # MLE fitting with a Gaussian function
         result_bu = MLE_G(self.log_tp_bu)
         result_ub = MLE_G(self.log_tp_ub)               
@@ -250,69 +273,31 @@ class Data:
         self.tu_MLE = 1/10**(self.m_u)           
         error_tb = 100*(self.tb_MLE/self.time_bound-1)
         error_tu = 100*(self.tu_MLE/self.time_unbound-1)  
-        print("Time bound (MLE) = %.1f (%.1f %%)" %(self.tb_MLE, error_tb)) 
-        print("Time unbound (MLE) = %.1f (%.1f %%) \n" %(self.tu_MLE, error_tu)) 
+        print("Time bound (HMM) = %.1f (%.1f %%)" %(self.tb_MLE, error_tb)) 
+        print("Time unbound (HMM) = %.1f (%.1f %%) \n" %(self.tu_MLE, error_tu)) 
 
-        # ----------------------------------------------------------------------
-        # HMM prediction with concatenated data   
-        self.remodel.fit(self.X_conc) # Fit (train) to find the parameters         
-        Z_predict_conc = self.remodel.predict(self.X_conc) # Predict the most likely trajectory
-        self.Z_predict_conc = Z_predict_conc.reshape(self.n_frame*self.n_sample, 1)          
-        self.converged_conc = self.remodel.monitor_.converged # Check the convergence
-        self.tp_conc = self.remodel.transmat_ # Transition probability
-
-        # Reorder state number such that X[Z=0] < X[Z=1] 
-        if self.X_conc[Z_predict_conc == 0].mean() > self.X_conc[Z_predict_conc == 1].mean():
-            self.Z_predict_conc = 1 - self.Z_predict_conc
-            self.tp_conc = np.array([[self.tp_conc[1][1], self.tp_conc[1][0]],
-                                     [self.tp_conc[0][1], self.tp_conc[0][0]]])
-
-        self.tp_bu_conc = self.tp_conc[1][0] + 1/n_frame # Transition prob from unbound to bound
-        self.tp_ub_conc = self.tp_conc[0][1] + 1/n_frame # Transition prob from bound to unbound
-        self.tb_HMM_conc = 1/self.tp_bu_conc # Bound time
-        self.tu_HMM_conc = 1/self.tp_ub_conc # Unbound time
-        error_tb = 100*(self.tb_HMM_conc/self.time_bound-1)
-        error_tu = 100*(self.tu_HMM_conc/self.time_unbound-1)      
-        print("HMM_concatenated is %s" %(["not converged.", "converged."][int(self.converged_conc)]))
-        print("Time bound (HMM, conc) = %.1f (%.1f %%)" %(self.tb_HMM_conc, error_tb))
-        print("Time unbound (HMM, conc) = %.1f (%.1f %%)\n" %(self.tu_HMM_conc, error_tu))
-
-
-    def threshold(self):
-        self.Z_Threshold = [None] * self.n_sample
-        self.X_Threshold = [None] * self.n_sample            
-  
-        for i in range(self.n_sample):
-            self.Z_Threshold[i] = np.zeros(self.n_frame)
-            for j in range(self.n_frame):
-                if self.X[i][j] > 0.5:
-                    self.Z_Threshold[i][j] = 1
-
-#            self.Z_Threshold[i][self.X[i]>0.5] = 1
-#            self.X_Threshold[i][self.Z_Threshold[i]==0] = np.mean(self.X[i][self.Z_Threshold[i]==0])
-#            self.X_Threshold[i][self.Z_Threshold[i]==1] = np.mean(self.X[i][self.Z_Threshold[i]==1])            
-      
         
+    # MLE analysis with exponential pdf    
+    def analyze_pdf(self):    
         
-    def analyze_pdf(self):
-
         dwell_b = []
         dwell_u = []
         
         for i in range(self.n_sample):      
-            if self.good_data[i]:
+            if self.good_data[i]: # Get dwell with only good data
+#            if 1 == 1:             # Use all the data set
                 tb, tu = get_dwell(self.Z_predict[i])
                 dwell_b.extend(tb)                   
                 dwell_u.extend(tu)
         
-        dwell_b = np.array(dwell_b)
-        dwell_u = np.array(dwell_u)
+        dwell_b = np.array(dwell_b) 
+        dwell_u = np.array(dwell_u) 
+          
+        self.dwell_b = dwell_b#[dwell_b < self.n_frame*0.5]
+        self.dwell_u = dwell_u#[dwell_u < self.n_frame*0.5]
         
-        self.dwell_b = dwell_b[dwell_b < self.n_frame*0.5]
-        self.dwell_u = dwell_u[dwell_u < self.n_frame*0.5]
-        
-        self.dwell_b_min = 0#np.min(self.dwell_b)
-        self.dwell_u_min = 0#np.min(self.dwell_u)        
+        self.dwell_b_min = np.min(self.dwell_b)
+        self.dwell_u_min = np.min(self.dwell_u)        
                
         # MLE fitting with an Exponential function
         result_b = MLE_E(self.dwell_b - self.dwell_b_min)
@@ -321,70 +306,50 @@ class Data:
         self.tu_pdf = float(result_u["x"]) + self.dwell_u_min       
         error_tb = 100*(self.tb_pdf/self.time_bound-1)
         error_tu = 100*(self.tu_pdf/self.time_unbound-1) 
-        print("Time bound (PDF) = %.1f (%.1f %%)" %(self.tb_pdf, error_tb))
-        print("Time unbound (PDF) = %.1f (%.1f %%) \n" %(self.tu_pdf, error_tu))
+        print("Time bound (MLE) = %.1f (%.1f %%)" %(self.tb_pdf, error_tb))
+        print("Time unbound (MLE) = %.1f (%.1f %%) \n" %(self.tu_pdf, error_tu))
 
-       
-    def analyze_icdf(self):
+        # Mean time analysis with t_max
+        tb_mean = self.dwell_b.mean() # Initial values for iteration
+        tu_mean = self.dwell_b.mean() # Initial values for iteration
         
-        self.t_b = np.arange(max(self.dwell_b))  
-        self.t_u = np.arange(max(self.dwell_u))   
+        # Iteration for convergence
+        for i in range(100):
+            tb_mean = self.dwell_b.mean() + n_frame / (np.exp(n_frame/tb_mean) - 1)
+            tu_mean = self.dwell_u.mean() + n_frame / (np.exp(n_frame/tu_mean) - 1)
 
-        # Inverse cumulative distrubution function from dwell time data         
-        self.icdf_b = icdf(self.dwell_b, self.t_b)
-        self.icdf_u = icdf(self.dwell_u, self.t_u)
+        # Corrected time_mean
+        self.tb_mean = tb_mean
+        self.tu_mean = tu_mean     
+        error_tb = 100*(self.tb_mean/self.time_bound-1)
+        error_tu = 100*(self.tu_mean/self.time_unbound-1) 
+        print("Time bound (Mean) = %.1f (%.1f %%)" %(self.tb_mean, error_tb))
+        print("Time unbound (Mean) = %.1f (%.1f %%) \n" %(self.tu_mean, error_tu))        
 
-        p_b = [self.tb_pdf, 1, 0]
-        p_u = [self.tu_pdf, 1, 0]
 
-        # Curve fit of the icdf
-#        p_b, c_b = scipy.optimize.curve_fit(Exp3, t_b[10:30], icdf_b[10:30], p0=p_b)#, [m_b, 1, 0])#, sigma = 1/icdf_b**0.5)
-#        p_u, c_u = scipy.optimize.curve_fit(Exp3, t_u[10:30], icdf_u[10:30], p0=p_u)#, sigma = 1/icdf_u**0.5)
- 
-        self.p_b, self.c_b = scipy.optimize.curve_fit(lambda t,a,b,c: b*np.exp(-t/a)+c, self.t_b, self.icdf_b, p0=p_b)#, sigma=1/icdf_b**0.5)
-        self.p_u, self.c_u = scipy.optimize.curve_fit(lambda t,a,b,c: b*np.exp(-t/a)+c, self.t_u, self.icdf_u, p0=p_u)#, sigma=1/icdf_u**0.5)
-
-        print('Time bound (icdf) = %.1f (%.1f %%)' %(self.p_b[0], 100*(self.p_b[0]/time_bound-1)))  
-        print('Time unbound (icdf) = %.1f (%.1f %%) \n' %(self.p_u[0], 100*(self.p_u[0]/time_unbound-1)))  
-              
-    
     def plot_trace(self):
 
         fig = plt.figure('trace', clear=True) 
         
-        for i in range(8):
+        for i in range(4): # i = molecule number
             # Mean values for true and predicted states
             X_true = np.zeros((n_frame,1))
             X_predict = np.zeros((n_frame,1))        
-            X_threshold = np.zeros((n_frame,1)) 
             
-            for j in range(2):
+            for j in range(2): # j = state number (0 or 1)
                 X_true[self.Z_true[i]==j] = self.X[i][self.Z_true[i]==j].mean()
-                X_predict[self.Z_predict[i]==j] = self.X[i][self.Z_predict[i]==j].mean()   
-                X_threshold[self.Z_Threshold[i]==j] = self.X[i][self.Z_Threshold[i]==j].mean()      
+                X_predict[self.Z_predict[i]==j] = self.X[i][self.Z_predict[i]==j].mean()      
                     
             # Percent of error
             percent_error = sum(abs(self.Z_true[i] - self.Z_predict[i]))/self.n_frame*100
-
-            # Plot the sampled data
-            sp = fig.add_subplot(2, 4, i+1)         
+           
+            sp = fig.add_subplot(2, 2, i+1)         
             sp.plot(self.X[i], "k", label="observations", ms=1, lw=1, alpha=0.5)
-            sp.plot(X_true, "b", label="states", lw=2, alpha=1)
-            sp.plot(X_predict, "r", label="predictions", lw=2, alpha=1)
-            sp.set_ylabel('Intensity')
-#            sp.set_title("SNR = %.1f, HMM" % (self.SNR[i])) #show both signal and noise
+            sp.plot(X_true, "b", label="true", lw=2, alpha=1) 
+            sp.plot(X_predict, "r", label="predict", lw=2, alpha=1)             
+            sp.set_xlabel('Frame')
+            sp.set_ylabel('Intensity')                 
             sp.set_title("SNR = %.1f, Error = %.1f %%" % (self.SNR[i], percent_error)) #show both signal and noise
-            
-#            sp = fig.add_subplot(2, 1, i+2)         
-#            sp.plot(self.X[i], "k", label="observations", ms=1, lw=1, alpha=0.5)
-#            sp.plot(X_true, "b", label="states", lw=2, alpha=1)
-#            sp.plot(X_threshold, "r", label="threshold", lw=2, alpha=1)       
-#            sp.set_xlabel('Frame')
-#            sp.set_ylabel('Intensity')      
-#            sp.set_title("SNR = %.1f, Threshoding" % (self.SNR[i])) #show both signal and noise            
-            
-            
-#            sp.set_title("SNR = %.1f, Error = %.1f %%" % (self.SNR[i], percent_error)) #show both signal and noise
             plt.show()
 
 
@@ -451,7 +416,10 @@ class Data:
 
 
     def plot_pdf(self):
-      
+
+        self.t_b = np.arange(max(self.dwell_b))  
+        self.t_u = np.arange(max(self.dwell_u))        
+        
         # Plot the result
         fig = plt.figure('PDF', clear=True)    
         
@@ -474,31 +442,7 @@ class Data:
         sp.set_title('Time unbound (PDF) = %.1f (%.1f %%)' %(self.tu_pdf, error_u))  
           
         plt.show()        
-        
-    def plot_icdf(self):
-        
-        fig = plt.figure('ICDF', clear=True)    
-        
-        sp = fig.add_subplot(121)  
-        sp.plot(self.t_b, self.icdf_b, 'ko', ms=2)
-        sp.plot(self.t_b, Exp3(self.p_b[0], self.p_b[1], self.p_b[2], self.t_b), 'r', lw=1)        
-        sp.set_xlim([0, max(self.t_b)])
-        sp.set_ylim([0, 1])
-        sp.set_xlabel('Frames')    
-        sp.set_ylabel('Pobability')  
-        sp.set_title('Time bound (icdf) = %.1f (%.1f %%)' %(self.p_b[0], 100*(self.p_b[0]/self.time_bound-1)))    
-                   
-        
-        sp = fig.add_subplot(122)  
-        sp.plot(self.t_u, self.icdf_u, 'ko', ms=2)
-        sp.plot(self.t_u, Exp3(self.p_u[0], self.p_u[1], self.p_u[2], self.t_u), 'r', lw=1)        
-        sp.set_xlim([0, max(self.t_u)])
-        sp.set_ylim([0, 1])        
-        sp.set_xlabel('Frames')    
-        sp.set_ylabel('Probability')  
-        sp.set_title('Time unbound (icdf) = %.1f (%.1f %%)' %(self.p_u[0], 100*(self.p_u[0]/self.time_unbound-1)))    
-      
-    
+
           
 
 def main(n_sample, n_frame, SNR, time_bound, time_unbound):
@@ -507,27 +451,22 @@ def main(n_sample, n_frame, SNR, time_bound, time_unbound):
     # Initialize 
     data = Data(n_sample, n_frame, SNR, time_bound, time_unbound)
     
-    # Generate list of data array
+    # Generate list of data array using HMM algorithm
+#    data.generate_HMM()
     data.generate()
     
-    # Predict from list of data array
-    data.predict()  
-  
-    # Test thresholding 
-    data.threshold()
+    # Predict from list of data array using HMM algorithm
+    data.predict_HMM()  
     
     # PDF analysis
     data.analyze_pdf()
-    
-    # ICDF analysis
-    data.analyze_icdf()
     
     # Plot the result
     data.plot_trace()
     data.plot_cluster()
     data.plot_HMM()     
-    data.plot_pdf()
-    data.plot_icdf()    
+    data.plot_pdf()  
+    plt.show()
        
     print("Calculation time = %d (s)" %(time.time()-start_time))
     
