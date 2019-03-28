@@ -20,12 +20,9 @@ from inspect import currentframe, getframeinfo
 
 fname = getframeinfo(currentframe()).filename # current file name
 
-current_dir = Path(fname).resolve().parent
-
 data_dir = Path(fname).resolve().parent.parent.parent / 'data' / 'raw'
 data_files = os.listdir(data_dir)
 
 
-print(current_dir)
 print(data_dir)
 print(data_files)
