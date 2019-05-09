@@ -26,6 +26,3 @@ data_dir = Path(fname).resolve().parent.parent.parent / 'data' / 'raw'
 data_files = os.listdir(data_dir)
 
 
-print(current_dir)
-print(data_dir)
-print(data_files)

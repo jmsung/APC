@@ -26,8 +26,8 @@ def generate_trace(t_total, t_b, t_u):
     """
     
     # Transition probability. This could be either tp = 1/t or tp = 1/(t+1)
-    tp_bu = 1/t_b
-    tp_ub = 1/t_u
+    tp_bu = 1-np.exp(-1/t_b)
+    tp_ub = 1-np.exp(-1/t_u)
     
     # Initialize that all the states are unbound
     signal = np.zeros(t_total) 
@@ -82,16 +82,16 @@ def find_dwell(trace):
 
     # Only one binding
     if len(tb) == 1 and len(tu) == 0:
-        t3 = [len(trace) - tb[0]]
+        t3 = [len(trace)-tb[0]-1]
         return t1, t2, t3, t4        
         
     # One binding and one unbinding
     if len(tb) == 1 and len(tu) == 1:        
         if tb[0] < tu[0]: # First binding, second unbinding
-            t2 = [tu[0] - tb[0]]
+            t2 = [tu[0]-tb[0]]
         else: # First unbinding, second binding
             t1 = [tu[0]+1]            
-            t3 = [len(trace) - tb[0]]
+            t3 = [len(trace)-tb[0]-1]
         return t1, t2, t3, t4           
         
     # All other cases below
@@ -103,8 +103,8 @@ def find_dwell(trace):
         
     # If last binding is unfinished
     if len(tb) > len(tu):
-        t3 = [len(trace) - tb[-1]]
-        tb = tb[:-2]         
+        t3 = [len(trace)-tb[-1]-1]
+        tb = tb[:-1]         
         
     # Complete binding and unbinding
     t2 = [tu[i]-tb[i] for i in range(len(tb))]
