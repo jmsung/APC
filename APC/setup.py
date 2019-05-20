@@ -21,11 +21,11 @@ with open(path.joinpath('README.md'), encoding='utf-8') as f:
 
 
 setup(
-    name='projectname',
+    name='APC',
     version='0.1.0',
     author='Jongmin Sung',
     author_email='jongmin.sung@gmail.com',
     license=path.joinpath('LICENSE.MD'),
-    description='Project test.',
+    description='Anaphase promoting complex',
     long_description=long_description,
 )
