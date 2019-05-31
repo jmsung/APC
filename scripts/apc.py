@@ -1,10 +1,10 @@
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-Single molecule binding and unbinding analysis (Jongmin Sung)
+Created by Jongmin Sung (jongmin.sung@gmail.com)
+
+Single molecule binding and unbinding analysis for anaphase promoting complex (apc) 
 
 class Data() 
 - path, name, load(), list[], n_movie, movies = [Movie()], plot(), analysis(), spot_size, frame_rate, 
-
-class Movie() 
 - path, name, n_row, n_col, n_frame, pixel_size, 
 - background, spots = [], molecules = [Molecule()]
 
@@ -15,22 +15,28 @@ class Molecule()
 
 from __future__ import division, print_function, absolute_import
 import numpy as np
-from PIL import Image
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import os
 import shutil
 #from scipy.optimize import curve_fit
-import time
-from scipy.optimize import minimize
-#from skimage import filters
 from skimage.feature import peak_local_max
 import platform
 from hmmlearn import hmm
-import random
+from pathlib import Path
+import sys
+sys.path.append("../apc/apc")   # Path where apc_config and apc_funcs are located
+from apc_config import data_dir # Configuration 
 
 
-PATH = r'C:\Users\Jongmin Sung\Box Sync\Research\Project\SiMPull\18-11-15 Multiple Movies (different days) Per Experiment\Hsl1 D-box on activator only (shorter)'
+# User-defined functions
+from apc_funcs import find_movie, read_movie, running_avg, reject_outliers, find_dwelltime  
+
+
+# User input ----------------------------------------------------------------
+
+movie_dir = data_dir / '18-12-04 D-box mutant' / 'antiStrep_pNH78_pNH95_1000frames_30.28sec_1_MMStack_Pos0.ome'
+print('Movie directory =', movie_dir)
 
 frame_rate = 33
 n_trace = 50
@@ -39,151 +45,7 @@ noise_cutoff = 0.5
 spot_size = 3
 SNR_min = 10
 
-
-def reject_outliers(data, m = 3.):
-    d = np.abs(data - np.median(data))
-    mdev = np.median(d)
-    s = d/mdev if mdev else 0.
-    return data[s<m]
-
-def running_avg(x, n):
-    return np.convolve(x, np.ones((n,))/n, mode='valid')  
-   
-def Exp(a, x):
-    return np.exp(-(x)/a)/a * (0.5*(np.sign(x)+1))  
-     
-def exp1(x, a, b, c):
-    return a + b * np.exp(-x/c)  
-
-def exp2(x, a, b, c, d, e):
-    return a + b * np.exp(-x/c) + d* np.exp(-x/e)  
-
-# Exponential function with cutoff at x = b 
-def Exp_cutoff(a, b, x):
-    return (np.exp(-(x-b)/a)/a) * (0.5*(np.sign(x-b)+1)) + 1e-100
-
-def Exp2_cutoff(a, b, c, d, x):
-    return (c*(np.exp(-(x-d)/a)/a) + (1-c)*(np.exp(-(x-d)/b)/b)) * (0.5*(np.sign(x-d)+1)) + 1e-100   
-
-# LogLikelihood 
-def LL2(param, d, x):      
-    [a, b, c] = param
-    return np.sum(np.log10(Exp2_cutoff(a, b, c, d, x)))  
-
-def MLE2(a, b, c, d, x): 
-    fun = lambda *args: -LL2(*args)
-    p0 = [a, b, c]
-    result = minimize(fun, p0, method='SLSQP', args=(d, x)) 
-    print(result)
-    return result
-
-def LL1(param, b, x):      
-    [a] = param
-    return np.sum(np.log10(Exp_cutoff(a, b, x)))  
-
-def MLE1(a, b, x): 
-    fun = lambda *args: -LL1(*args)
-    p0 = [a]
-    result = minimize(fun, p0, method='SLSQP', args=(b, x)) 
-#    print(result)
-    return result
-
-            
-def crop(self, I, x, y, s):
-    hs = int(s/2)
-    I0 = I[x-hs:x+hs+1, y-hs:y+hs+1]
-    val = skimage.filters.threshold_otsu(I0)
-    mask = I0 > val
-    return mask
-        
-                      
-def drift(self):
-    r = 20  
-    size = min(self.n_row, self.n_row) - (2*r+10)
-    I0 = self.I[0,] # 0th frame 
-    cx = int(self.n_row/2)
-    cy = int(self.n_col/2) 
-    I0s = self.crop(I0, cx, cy, size)     
-    self.I0s = I0s
-     
-    self.drift = np.zeros((self.n_frame, 2*r+1, 2*r+1), dtype=float)  
-     
-    self.drift_x = []
-    self.drift_y = []
-
-    for i in range(self.n_frame):  
-        print(i)
-        I1 = self.I[i,] # ith frame  
-        for j in range(-r, r+1):
-            for k in range(-r, r+1):
-                I1s = self.crop(I1, cx+j, cy+k, size)
-                corr = np.sum(I0s*I1s)
-                self.drift[i, j+r, k+r] = corr
-                                    
-        self.drift[i,] = self.drift[i,] - self.drift[i,].min()
-        self.drift[i,] = self.drift[i,]/self.drift[i,].max()
-        dr = np.argwhere(self.drift[i,] == 1)
-        self.drift_x += [dr[0][1]-r]
-        self.drift_y += [dr[0][0]-r]
-        
-def drift_correct(self):
-    I = np.zeros((self.n_frame, self.n_row, self.n_col), dtype=int)
-    dx = self.drift_x
-    dy = self.drift_y
-        
-    for i in range(self.n_frame):  
-        for j in range(self.n_row):
-            if j-dy[i] >= 0 and j-dy[i] < self.n_row: 
-                for k in range(self.n_col):
-                    if k-dx[i] >= 0 and k-dx[i] < self.n_col:                    
-                        I[i, j-dy[i], k-dx[i]] = self.I[i, j, k]                                  
-    self.I = I
-                   
-def offset(self):
-    I_min = np.min(self.I, axis=0)
-    for i in range(self.n_frame):
-        self.I[i,] = self.I[i,] - I_min
-
-# Find local maxima from movie.I_max                    
-def find_peaks(self):#, spot_size): 
-    I = self.I_max
-#       self.peaks = skimage.feature.peak_local_max(I, min_distance=int(spot_size*1.5))
-    self.peaks = peak_local_max(I, min_distance=int(spot_size*1.5))        
-    self.n_peaks = len(self.peaks[:, 1])
-    print('\nFound', self.n_peaks, 'peaks. ')
-        
-# Find real molecules from the peaks
-def find_mols(self):#, spot_size, SNR_min):#, dwell_min, dwell_max): 
-    row = self.peaks[::-1,0]
-    col = self.peaks[::-1,1]
-    self.mols = []
-    self.dwells = []
-    self.noise = []
-    self.SNR = []
-    self.tp_ub = []
-    self.tp_bu = []
-    for i in range(self.n_peaks):
-        mol = Mol(self.I, row[i], col[i])#, spot_size)
-        mol.normalize()
-        mol.find_noise()
-#           if mol.evaluate(SNR_min, dwell_min, dwell_max) is True:
-        if mol.evaluate() is True:
-            self.mols.append(mol)    
-            self.dwells.extend(mol.dwell)
-            self.noise.append(mol.noise)
-            self.SNR.extend(mol.SNR)
-            self.tp_ub.append(mol.tp_ub)
-            self.tp_bu.append(mol.tp_bu)            
-    print('Found', len(self.mols), 'molecules. \n')  
- 
-def find_dwelltime(dwells):
-    x = np.array(dwells)
-    result1 = MLE1(np.mean(dwells), np.min(dwells), x)
-    dwell_fit1 = result1["x"]
-    return dwell_fit1
-#       result2 = MLE2(np.mean(self.dwells)/2, np.mean(self.dwells)*2, 0.5, np.min(self.dwells), x)
-#       self.dwell_fit2 = result2["x"]
-            
+# ---------------------------------------------------------------------------
 
 class Mol:
     def __init__(self, I, row, col):  
@@ -296,8 +158,7 @@ class Mol:
                                       [0.1, 0.9]])
         remodel.means_ = np.array([0, 1])
         remodel.covars_ = np.tile(np.identity(1), (2, 1, 1)) * self.noise**2        
-        
-    
+           
         # Estimate model parameters (training)
         remodel.fit(X)  
         
@@ -305,10 +166,11 @@ class Mol:
         Z_predict = remodel.predict(X)
         
         # Reorder state number such that X[Z=0] < X[Z=1] 
-        if X[Z_predict == 0].mean() > X[Z_predict == 1].mean():
+        if X[Z_predict==0].mean() > X[Z_predict==1].mean():
             Z_predict = 1 - Z_predict
-            remodel.transmat_ = np.array([[remodel.transmat_[1][1], remodel.transmat_[1][0]],
-                                          [remodel.transmat_[0][1], remodel.transmat_[0][0]]])
+            remodel.transmat_ = np.array(
+                [[remodel.transmat_[1][1], remodel.transmat_[1][0]],
+                 [remodel.transmat_[0][1], remodel.transmat_[0][0]]])
    
         self.tp_ub = remodel.transmat_[0][1] 
         self.tp_bu = remodel.transmat_[1][0]
@@ -316,7 +178,7 @@ class Mol:
         # Sequence of predicted states        
         self.I_predict = np.zeros(len(X))
         for i in range(2):
-            self.I_predict[Z_predict == i] = X[Z_predict == i].mean()  
+            self.I_predict[Z_predict==i] = X[Z_predict==i].mean()  
                           
         return True
                                                                                                                                                                                                                                                                                                                                                                                                                               
@@ -324,36 +186,19 @@ class Mol:
 class Data:
     def __init__(self):
         pass
-        
-    def read(self):
-#        x = os.getcwd()
-        self.path = PATH
+     
+    # Read a movie.tif and save into I[frame, row, col]     
+    def read(self):  
+        self.movie_dir = movie_dir                   # User defined directory
+        self.movie_name = find_movie(self.movie_dir)     
+        print('Movie name = ', self.movie_name)
+        self.movie_path = self.movie_dir/self.movie_name
 
-        if platform.system() == 'Windows':
-            path_split = self.path.split('\\')    
-        else:
-            path_split = self.path.split('/')   
-            
-        self.name = path_split[len(path_split)-1]      
-        print('Name: %s \n' %(self.name))
-        
-        file_list = os.listdir(self.path)                      
-
-        for j in range(len(file_list)):
-            if file_list[j][-4:] == '.tif':
-                movie_name = file_list[j]
-        movie_path = os.path.join(self.path, movie_name) 
-        movie = Image.open(movie_path)
-        self.n_frame = movie.n_frames
-        self.n_row = movie.size[1]
-        self.n_col = movie.size[0]
-        print('[frame, row, col] = [%d, %d, %d] \n' %(self.n_frame, self.n_row, self.n_col))        
-          
-        self.I = np.zeros((self.n_frame, self.n_row, self.n_col), dtype=int)
-        for i in range(self.n_frame): 
-            movie.seek(i) # Move to i-th frame
-            self.I[i,] = np.array(movie, dtype=int)                                                                                                                                                                                                                                                                                               
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+        self.I, self.meta_data = read_movie(self.movie_path)
+        self.n_frame = np.size(self.I, 0)
+        self.n_row = np.size(self.I, 1)
+        self.n_col = np.size(self.I, 2)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        
     def analyze(self):
 #        movie.drift()
 #        movie.drift_correct()
@@ -431,7 +276,7 @@ class Data:
     #        else:            
     #            bins = 'scott'          
                                     
-        hist_lifetime = sp1.hist(self.dwells, bins ='scott' , normed=False, color='k', histtype='step', linewidth=2)
+        hist_lifetime = sp1.hist(self.dwells, bins='scott', normed=False, color='k', histtype='step', linewidth=2)
     
         n_lifetime = len(self.dwells)*(hist_lifetime[1][1] - hist_lifetime[1][0])
         x_lifetime = np.linspace(0, max(self.dwells), 1000)
@@ -548,7 +393,7 @@ class Data:
 #            if self.drift_corr == 'y':
 #                self.plot_drift(path)
         self.plot_traces()    
-        self.plot_HMM()
+#        self.plot_HMM()
      
     def save(self):
         pass        
@@ -559,14 +404,27 @@ class Data:
 def main():
     data = Data()
     data.read()
-    data.analyze()
-    data.save()
-    data.plot()
+#    data.analyze()
+#    data.save()
+#    data.plot()
 
 if __name__ == "__main__":
     main()
 
 
+
+"""
+Done
+* read tiff meta data
+
+
+To-do
+* save meta data 
+* search tiff in subfolder 
+
+
+
+"""
 
 
 
