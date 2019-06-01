@@ -22,7 +22,7 @@ import shutil
 #from scipy.optimize import curve_fit
 from skimage.feature import peak_local_max
 import platform
-from hmmlearn import hmm
+#from hmmlearn import hmm
 from pathlib import Path
 import sys
 sys.path.append("../apc/apc")   # Path where apc_config and apc_funcs are located
@@ -414,15 +414,22 @@ if __name__ == "__main__":
 
 
 """
-Done
-* read tiff meta data
-
-
 To-do
-* save meta data 
+
+* Go through the previous code
+* Drift correction 
+* HMM step finding
+* Combining classes of events (binding and unbinding)
+* Flat field correction
+* Save results in a text
+* Seperate code to read text and combine or compare
+* find time info from the meta data > save in file
 * search tiff in subfolder 
 
+-----------------------------------------------------------------
+Done
 
+* read tiff meta data (19-05-31)
 
 """
 
