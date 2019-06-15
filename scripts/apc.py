@@ -34,13 +34,14 @@ from apc_config import data_dir # Configuration
 
 
 # User-defined functions
-from apc_funcs import read_movie, running_avg, reject_outliers, \
-Exp_cutoff, find_dwelltime, get_corr
+from apc_funcs import read_movie, running_avg, reject_outliers, str2bool, \
+Exp_cutoff, find_dwelltime, flatfield_correct, drift_correct, offset_correct
 
 
 # User input ----------------------------------------------------------------
 
-directory = data_dir/'18-12-04 D-box mutant'
+#directory = data_dir/'18-12-04 D-box mutant'
+directory = data_dir/'18-06-29 Drift correction'
 directory = data_dir
 
 #frame_rate = 33
@@ -196,44 +197,50 @@ class Movie:
 
     # Read info.txt and movie.tif   
     def read(self):  
-
         # Read info.txt
-        info = {}
+        self.info = {}
         with open(Path(self.dir/'info.txt')) as f:
             for line in f:
                 line = line.replace(" ", "") # remove white space
                 if line == '\n': # skip empty line
                     continue
-                (key, val) = line.split("=")
-                info[key] = val
+                (key, value) = line.rstrip().split("=")
+                self.info[key] = value
+        self.dt = float(self.info['time_interval'])
+        self.spot_size = int(float(self.info['magnification'])*3/100) 
 
-        self.dt = float(info['time_interval'])
-        self.magnification = int(info['magnification'])
-        self.drift_correct = bool(info['drift_correct'])
-        self.flatfield_correct = bool(info['flatfield_correct'])
-        self.num_trace = int(info['num_trace'])
-        self.spot_size = int(self.magnification*3/100)
+        # Read original image (I_original) from movie.tif
+        self.bin_size = 20
+        self.I_original, self.metadata = read_movie(self.path, self.bin_size)
+        self.I_min = np.min(self.I_original, axis=0)
+        self.n_frame = np.size(self.I_original, axis=0)
+        self.n_row = np.size(self.I_original, axis=1)
+        self.n_col = np.size(self.I_original, axis=2) 
 
-        # Read image from movie.tif
-        self.bin_size = 40
-        self.I0, self.metadata = read_movie(self.path, self.bin_size)
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        
     def correct(self):
-
-        # Min & Max projection before flatfield correction
-        self.I_min0 = np.min(self.I0, axis=0)     
-        self.I_med0 = np.median(self.I0, axis=0)
-        self.I_max0 = np.max(self.I0, axis=0)
+        # Drift correct
+        if str2bool(self.info['drift_correct']) == True:
+            print('drift_correct = True')
+            self.drift_row, self.drift_col, self.I_drift \
+                = drift_correct(self.I_original)
+        else:
+            print('drift_correct = False')
+            self.drift_row = np.zeros((self.n_frame))
+            self.drift_col = np.zeros((self.n_frame))
+            self.I_drift = np.array(self.I_original)
         
-        # Flatfield correction 
-        self.I_bin, self.I_fit = get_corr(self.I_max0, self.bin_size)
-        self.I_dev = self.I_bin - self.I_fit
-        self.I_max = self.I_max0 / self.I_fit
+        # Flatfield correct
+        if str2bool(self.info['flatfield_correct']) == True:
+            print('flatfield_correct = True')
+            self.I_bin, self.I_fit, self.I_flatfield \
+                = flatfield_correct(self.I_drift, self.bin_size)
+        else:
+            print('flatfield_correct = False')
+            self.I_bin = np.zeros((self.n_row, self.n_col))
+            self.I_fit = np.zeros((self.n_row, self.n_col))
+            self.I_flatfield = np.array(self.I_drift)
 
-
-#        movie.drift()
-#        movie.drift_correct()
-
+        self.I = np.array(self.I_flatfield)
 
     def analyze(self):
         # Find peaks from local maximum
@@ -270,33 +277,59 @@ class Movie:
         self.dwell_mean = np.mean(self.dwells)-min(self.dwells)
         self.dwell_std = np.std(self.dwells)
   
-                                                                                                                                                                                                                                                                                                                                                                                                                                                               
-    def plot_image(self):                                                     
-        fig1 = plt.figure(1, figsize = (20, 10), dpi=300)    
+    def plot_image1_max(self):
+        fig = plt.figure(figsize = (20, 10), dpi=300)            
 
-        sp1 = fig1.add_subplot(231)  
-        sp1.imshow(self.I_min0, cmap=cm.inferno)
-        sp1.set_title('Minimum intensity')
+        sp = fig.add_subplot(131)  
+        I_original = np.max(self.I_original, axis=0)
+        sp.imshow(I_original, cmap=cm.inferno)
+        sp.set_title('Max intensity - original')
 
-        sp2 = fig1.add_subplot(232)  
-        sp2.imshow(self.I_max0, cmap=cm.inferno)
-        sp2.set_title('Maximum intensity - original')
+        sp = fig.add_subplot(132)  
+        I_drift = np.max(self.I_drift, axis=0)
+        sp.imshow(I_drift, cmap=cm.inferno)
+        sp.set_title('Max intensity - drift')
 
-        sp3 = fig1.add_subplot(233)  
-        sp3.imshow(self.I_max, cmap=cm.inferno)
-        sp3.set_title('Maximum intensity - corrected')
+        sp = fig.add_subplot(133)  
+        I_flatfield = np.max(self.I_flatfield, axis=0)
+        sp.imshow(I_flatfield, cmap=cm.inferno)
+        sp.set_title('Max intensity - flatfield')        
 
-        sp4 = fig1.add_subplot(234)  
-        sp4.imshow(self.I_bin, cmap=cm.inferno)
-        sp4.set_title('Maximum intensity - bin')
+        fig.savefig(self.dir/'image1_max.png')   
+        plt.close(fig)                                                                                                                                                                                                                                                                                                                                                                                                                                                            
+
+    def plot_image2_drift(self):                                                     
+        fig = plt.figure(figsize = (20, 10), dpi=300)    
+
+        sp = fig.add_subplot(211)  
+        sp.plot(self.drift_row)
+        sp.set_title('Drift in row')
+
+        sp = fig.add_subplot(212)  
+        sp.plot(self.drift_col)
+        sp.set_title('Drift in col')
+
+        fig.savefig(self.dir/'image2_drift.png')   
+        plt.close(fig)
+
+    def plot_image3_flatfield(self):                                                     
+        fig = plt.figure(figsize = (20, 10), dpi=300)    
+
+        sp = fig.add_subplot(131)  
+        sp.imshow(self.I_bin, cmap=cm.inferno)
+        sp.set_title('Max intensity - bin')
  
-        sp5 = fig1.add_subplot(235)  
-        sp5.imshow(self.I_fit, cmap=cm.inferno)
-        sp5.set_title('Maximum intensity - fit')
+        sp = fig.add_subplot(132)  
+        sp.imshow(self.I_fit, cmap=cm.inferno)
+        sp.set_title('Max intensity - fit')
 
-        sp6 = fig1.add_subplot(236)  
-        sp6.imshow(self.I_dev, cmap=cm.inferno)
-        sp6.set_title('Maximum intensity - dev')
+        sp = fig.add_subplot(133)  
+        sp.imshow(self.I_bin - self.I_fit, cmap=cm.inferno)
+        sp.set_title('Max intensity - dev')
+
+        fig.savefig(self.dir/'image3_flatfield.png')   
+        plt.close(fig)
+
 
 
 
@@ -307,9 +340,7 @@ class Movie:
 #        title = 'Molecules = %d, Spot size = %d' % (len(self.mols), self.spot_size)  
 #        sp3.set_title(title)      
         
-        fig1.savefig(self.dir/'Image.png')   
-        plt.close(fig1)
-    
+
     def plot_histogram(self):            
         fig2 = plt.figure(2, figsize = (20, 10), dpi=300)  
             
@@ -423,8 +454,7 @@ class Movie:
         
         fig3.savefig(self.movie_dir/'HMM.png')  
         plt.close(fig3)     
-                                                                                                                                                                                  
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
     def save(self):
         pass        
       
@@ -465,7 +495,10 @@ def main():
 
         # Plot the result
         print("\nPlotting figures...")  
-        movie.plot_image()
+        movie.plot_image1_max()
+        movie.plot_image2_drift()          
+        movie.plot_image3_flatfield()
+              
 #        movie.plot_histogram()
 #        movie.plot_traces()
 #        movie.plot_HMM()
@@ -478,8 +511,6 @@ if __name__ == "__main__":
 
 """
 To-do
-
-* Drift correction 
 
 * set dwell_max, dwell_min
 * Histogram of intensity
@@ -496,6 +527,7 @@ Done
 * find movies in the subfolder (19-06-06)
 * read info.txt for the parameters (19-06-06)
 * Flat field correction: max > bin > fit > norm (19-06-12)
+* Drift correction (19-06-15)
 """
 
 
