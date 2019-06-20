@@ -22,64 +22,218 @@ from skimage import filters
 from PIL import Image
 from tifffile import TiffFile
 import csv
+from scipy import optimize
+from hmmlearn import hmm
 #import pandas as pd
-
-def find_movie(directory):
-    for file in os.listdir(directory):
-        if file.endswith(".tif"):
-            filename = file
-    return filename
 
 def read_movie1(movie_path):
     movie = Image.open(movie_path)
     n_frame = movie.n_frames
     n_row = movie.size[1]
     n_col = movie.size[0]
-    print('[frame, row, col] = [',n_frame, n_row, n_col,']')        
-          
+
     # Read tif file and save into I[frame, row, col]
     I = np.zeros((n_frame, n_row, n_col), dtype=int)
     for i in range(n_frame): 
         movie.seek(i) # Move to i-th frame
-        I[i,] = np.array(movie, dtype=int)    
-    return I
+        I[i,] = np.array(movie, dtype=int)
 
-def read_movie2(movie_path):
-    # read tiff file
-    with TiffFile(movie_path) as tif:
-        imagej_hyperstack = tif.asarray()
-        imagej_metadata = tif.imagej_metadata
+    m = 100
+    n_row = int(np.floor(n_row/m)*m)
+    n_col = int(np.floor(n_col/m)*m) 
 
-    f = open('meta_data.txt', 'w')
-    f.write(str(imagej_metadata))
-    f.close()
+    return I[:,:n_row,:n_col]
 
-    return imagej_hyperstack, imagej_metadata
+def str2bool(v):
+  return v.lower() in ("yes", "true", "t", "1")
 
-def read_movie(movie_path):
+def read_movie(movie_path, bin_size):
     # read tiff file
     with TiffFile(movie_path) as tif:
         imagej_hyperstack = tif.asarray()
         imagej_metadata = str(tif.imagej_metadata)
         imagej_metadata = imagej_metadata.split(',')
 
-#    for item in imagej_metadata:
-#        print(item)
+    n_frame = np.size(imagej_hyperstack, 0)
+    n_row = np.size(imagej_hyperstack, 1)
+    n_col = np.size(imagej_hyperstack, 2) 
 
     # write meta_data    
     with open(movie_path.parent/'meta_data.txt', 'w') as f:
         for item in imagej_metadata:
             f.write(item+'\n')
 
-    return imagej_hyperstack, imagej_metadata
+    # Crop the image to make the size integer multiple of 10
+    m = bin_size
+    n_row = int(int(n_row/m)*m)
+    n_col = int(int(n_col/m)*m)
+    imagej_crop = imagej_hyperstack[:,:n_row,:n_col]
+    print('[frame, row, col] = [%d, %d, %d]' %(n_frame, n_row, n_col))  
+
+    return imagej_crop, imagej_metadata
+
+def gaussian_2d(height, center_x, center_y, width_x, width_y, offset):
+    """Returns a gaussian function with the given parameters"""
+    width_x = float(width_x)
+    width_y = float(width_y)
+    offset = float(offset)
+    return lambda x,y: height*np.exp(                
+                - (((center_x - (x))/width_x)**2     
+                  +((center_y - (y))/width_y)**2)/2) + offset
+
+def moments(data):
+    """Returns (height, x, y, width_x, width_y, offset)
+    the gaussian parameters of a 2D distribution by calculating its
+    moments """
+    total = data.sum()
+    X, Y = np.indices(data.shape)
+    x = (X*data).sum()/total
+    y = (Y*data).sum()/total
+    col = data[:, int(y)]
+    width_x = np.sqrt(np.abs((np.arange(col.size)-y)**2*col).sum()/col.sum())
+    row = data[int(x), :]
+    width_y = np.sqrt(np.abs((np.arange(row.size)-x)**2*row).sum()/row.sum())
+    height = data.max()
+    offset = data.min()
+    return height, x, y, width_x, width_y, offset
+
+def fitgaussian(data):
+    """Returns (height, x, y, width_x, width_y)
+    the gaussian parameters of a 2D distribution found by a fit"""
+    params = moments(data)
+    errorfunction = lambda p: np.ravel(gaussian_2d(*p)(*np.indices(data.shape)) - data)
+    p, success = optimize.leastsq(errorfunction, params)
+    return p
+
+def flatfield_correct(I, bin_size):
+    n_frame = np.size(I, 0)
+    n_row = np.size(I, 1)
+    n_col = np.size(I, 2)
+
+    # Binning
+    I_max = np.max(I, axis=0)   
+    I_bin = np.array(I_max)
+    m = bin_size    
+    for i in range(int(n_row/m)):
+        for j in range(int(n_col/m)):
+            I_bin[i*m:(i+1)*m, j*m:(j+1)*m] = np.median(I_max[i*m:(i+1)*m, j*m:(j+1)*m])
+
+    # Gaussian fitting to the bin
+    """ param = height, x, y, width_x, width_y, offset """
+    params = fitgaussian(I_bin)
+    I_fit = gaussian_2d(*params)(*np.indices(I_max.shape))
+
+    # Flatfield correct
+    I_flatfield = np.array(I)
+    for i in range(n_frame):
+        I_flatfield[i,] = I[i,] / I_fit * np.max(I_fit)
+
+    I_flat_max = np.max(I_flatfield, axis=0)   
+    I_flat_bin = np.array(I_max)
+    for i in range(int(n_row/m)):
+        for j in range(int(n_col/m)):
+            I_flat_bin[i*m:(i+1)*m, j*m:(j+1)*m] = np.median(I_flat_max[i*m:(i+1)*m, j*m:(j+1)*m])
+
+    return I_bin, I_fit, I_flatfield, I_flat_bin
 
 
+def drift_correct(I):
+    I_ref = I[int(len(I)/2),] # Mid frame as a reference frame
+#    I_ref = np.max(I, axis=0)
 
-def reject_outliers(data, m=3):
+    # Translation as compared with I_ref
+    d_row = np.zeros(len(I), dtype='int')
+    d_col = np.zeros(len(I), dtype='int')
+    for i, I_frame in enumerate(I):
+        result = translation(I_ref, I_frame)
+        d_row[i] = round(result['tvec'][0])
+        d_col[i] = round(result['tvec'][1])      
+
+    # Changes of translation between the consecutive frames
+    dd_row = d_row[1:] - d_row[:-1]
+    dd_col = d_col[1:] - d_col[:-1]
+
+    # Sudden jump in translation set to zero
+    step_limit = 1
+    dd_row[abs(dd_row)>step_limit] = 0
+    dd_col[abs(dd_col)>step_limit] = 0
+
+    # Adjusted translation
+    d_row[0] = 0
+    d_col[0] = 0
+    d_row[1:] = np.cumsum(dd_row)
+    d_col[1:] = np.cumsum(dd_col)
+
+    # Offset mid to zero
+    drift_row = d_row - int(np.median(d_row))
+    drift_col = d_col - int(np.median(d_col))
+
+    # Translate images
+    for i in range(len(I)):
+        I[i,] = np.roll(I[i,], drift_row[i], axis=0)
+        I[i,] = np.roll(I[i,], drift_col[i], axis=1)        
+    
+    return drift_row, drift_col, I
+
+
+def reject_outliers(data, row, col):
+    m = 3
     d = np.abs(data - np.median(data))
     mdev = np.median(d)
     s = d/mdev if mdev else 0.
-    return data[s<m]
+    return data[s<m], row[s<m], col[s<m]
+
+
+def get_trace(I, row, col, spot_size):  
+    r = row
+    c = col
+    s = int((spot_size-1)/2)
+    return np.mean(np.mean(I[:,r-s:r+s+1,c-s:c+s+1], axis=2), axis=1)
+
+def fit_trace(I_trace):
+    n_frame = len(I_trace)
+                
+    # HMM      
+    X = I_trace.reshape(n_frame, 1)
+          
+    # Set a new model for traidning
+    param=set(X.ravel())
+    remodel = hmm.GaussianHMM(n_components=2, covariance_type="full", 
+        n_iter=100, params=param)        
+        
+    # Set initial parameters for training
+    remodel.startprob_ = np.array([0.9, 0.1])
+    remodel.transmat_ = np.array([[0.99, 0.01], 
+                                  [0.1, 0.9]])
+    remodel.means_ = np.array([X.min(), X.max()])
+    remodel.covars_ = np.tile(np.identity(1), (2, 1, 1)) * (X.max()-X.min()) * 0.1        
+           
+    # Estimate model parameters (training)
+    remodel.fit(X)
+
+    # Find most likely state sequence corresponding to X
+    Z = remodel.predict(X)
+        
+    # Reorder state number such that X[Z=0] < X[Z=1] 
+    if X[Z==0].mean() > X[Z==1].mean():
+        Z = 1 - Z
+        remodel.transmat_ = np.array(
+            [[remodel.transmat_[1][1], remodel.transmat_[1][0]],
+             [remodel.transmat_[0][1], remodel.transmat_[0][0]]])
+    
+    # Transition probability
+    tp_ub = remodel.transmat_[0][1] 
+    tp_bu = remodel.transmat_[1][0]
+        
+    # Intensity trace fit      
+    I_fit = np.zeros((n_frame))
+    I_fit[Z==0] = X[Z==0].mean()  
+    I_fit[Z==1] = X[Z==1].mean()                            
+
+    return I_fit, tp_ub, tp_bu
+
+   
+
 
 def running_avg(x, n):
     return np.convolve(x, np.ones((n,))/n, mode='valid')  
@@ -123,94 +277,8 @@ def MLE1(a, b, x):
 #    print(result)
     return result
 
-            
-def crop(self, I, x, y, s):
-    hs = int(s/2)
-    I0 = I[x-hs:x+hs+1, y-hs:y+hs+1]
-    val = skimage.filters.threshold_otsu(I0)
-    mask = I0 > val
-    return mask
-        
-                      
-def drift(self):
-    r = 20  
-    size = min(self.n_row, self.n_row) - (2*r+10)
-    I0 = self.I[0,] # 0th frame 
-    cx = int(self.n_row/2)
-    cy = int(self.n_col/2) 
-    I0s = self.crop(I0, cx, cy, size)     
-    self.I0s = I0s
-     
-    self.drift = np.zeros((self.n_frame, 2*r+1, 2*r+1), dtype=float)  
-     
-    self.drift_x = []
-    self.drift_y = []
 
-    for i in range(self.n_frame):  
-        print(i)
-        I1 = self.I[i,] # ith frame  
-        for j in range(-r, r+1):
-            for k in range(-r, r+1):
-                I1s = self.crop(I1, cx+j, cy+k, size)
-                corr = np.sum(I0s*I1s)
-                self.drift[i, j+r, k+r] = corr
-                                    
-        self.drift[i,] = self.drift[i,] - self.drift[i,].min()
-        self.drift[i,] = self.drift[i,]/self.drift[i,].max()
-        dr = np.argwhere(self.drift[i,] == 1)
-        self.drift_x += [dr[0][1]-r]
-        self.drift_y += [dr[0][0]-r]
-        
-def drift_correct(self):
-    I = np.zeros((self.n_frame, self.n_row, self.n_col), dtype=int)
-    dx = self.drift_x
-    dy = self.drift_y
-        
-    for i in range(self.n_frame):  
-        for j in range(self.n_row):
-            if j-dy[i] >= 0 and j-dy[i] < self.n_row: 
-                for k in range(self.n_col):
-                    if k-dx[i] >= 0 and k-dx[i] < self.n_col:                    
-                        I[i, j-dy[i], k-dx[i]] = self.I[i, j, k]                                  
-    self.I = I
-                   
-def offset(self):
-    I_min = np.min(self.I, axis=0)
-    for i in range(self.n_frame):
-        self.I[i,] = self.I[i,] - I_min
 
-# Find local maxima from movie.I_max                    
-def find_peaks(self):#, spot_size): 
-    I = self.I_max
-#       self.peaks = skimage.feature.peak_local_max(I, min_distance=int(spot_size*1.5))
-    self.peaks = peak_local_max(I, min_distance=int(spot_size*1.5))        
-    self.n_peaks = len(self.peaks[:, 1])
-    print('\nFound', self.n_peaks, 'peaks. ')
-        
-# Find real molecules from the peaks
-def find_mols(self):#, spot_size, SNR_min):#, dwell_min, dwell_max): 
-    row = self.peaks[::-1,0]
-    col = self.peaks[::-1,1]
-    self.mols = []
-    self.dwells = []
-    self.noise = []
-    self.SNR = []
-    self.tp_ub = []
-    self.tp_bu = []
-    for i in range(self.n_peaks):
-        mol = Mol(self.I, row[i], col[i])#, spot_size)
-        mol.normalize()
-        mol.find_noise()
-#           if mol.evaluate(SNR_min, dwell_min, dwell_max) is True:
-        if mol.evaluate() is True:
-            self.mols.append(mol)    
-            self.dwells.extend(mol.dwell)
-            self.noise.append(mol.noise)
-            self.SNR.extend(mol.SNR)
-            self.tp_ub.append(mol.tp_ub)
-            self.tp_bu.append(mol.tp_bu)            
-    print('Found', len(self.mols), 'molecules. \n')  
- 
 def find_dwelltime(dwells):
     x = np.array(dwells)
     result1 = MLE1(np.mean(dwells), np.min(dwells), x)
@@ -219,21 +287,6 @@ def find_dwelltime(dwells):
 #       result2 = MLE2(np.mean(self.dwells)/2, np.mean(self.dwells)*2, 0.5, np.min(self.dwells), x)
 #       self.dwell_fit2 = result2["x"]
   
-
-def drift_correct(I_ref, I_frame):
-    """
-    Input: frames of 2D image
-    Return: translation vector 
-    """
-
-    drift = []
-
-    for ix in range(len(I_frame)):
-        result = translation(I_ref, I_frame[ix])
- 
-        drift.append(result['tvec'])
-    
-    return drift
 
 
 def find_dwell(trace):
