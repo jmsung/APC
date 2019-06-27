@@ -18,7 +18,9 @@ import random
 import os
 from imreg_dft.imreg import translation
 from scipy.optimize import minimize
-from skimage import filters
+from skimage.filters import (threshold_otsu, threshold_niblack,
+                             threshold_sauvola)
+
 from PIL import Image
 from tifffile import TiffFile
 import csv
@@ -105,7 +107,7 @@ def fitgaussian(data):
     p, success = optimize.leastsq(errorfunction, params)
     return p
 
-def flatfield_correct(I, bin_size):
+def flatfield_correct1(I, bin_size):
     n_frame = np.size(I, 0)
     n_row = np.size(I, 1)
     n_col = np.size(I, 2)
@@ -136,6 +138,28 @@ def flatfield_correct(I, bin_size):
 
     return I_bin, I_fit, I_flatfield, I_flat_bin
 
+def flatfield_correct(I, bin_size):
+    n_frame = np.size(I, 0)
+    n_row = np.size(I, 1)
+    n_col = np.size(I, 2)
+
+    # Binning
+    I_max = np.max(I, axis=0)   
+    I_bin = np.array(I_max)
+    m = bin_size    
+    for i in range(int(n_row/m)):
+        for j in range(int(n_col/m)):
+            image = I_max[i*m:(i+1)*m, j*m:(j+1)*m]
+            binary = image > threshold_otsu(image)
+            I_s = I_max[i*m:(i+1)*m, j*m:(j+1)*m]
+            I_bin[i*m:(i+1)*m, j*m:(j+1)*m] = np.median(I_s[binary])
+
+    # Flatfield correct
+    I_flatfield = np.array(I)
+    for i in range(n_frame):
+        I_flatfield[i,] = I[i,] / I_bin * np.max(I_bin)
+
+    return I_bin, I_flatfield
 
 def drift_correct(I):
     I_ref = I[int(len(I)/2),] # Mid frame as a reference frame
@@ -189,6 +213,7 @@ def get_trace(I, row, col, spot_size):
     c = col
     s = int((spot_size-1)/2)
     return np.mean(np.mean(I[:,r-s:r+s+1,c-s:c+s+1], axis=2), axis=1)
+
 
 def fit_trace(I_trace):
     n_frame = len(I_trace)
