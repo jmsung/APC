@@ -17,6 +17,7 @@ from __future__ import division, print_function, absolute_import
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
+import seaborn as sns
 from pathlib import Path  
 import os
 import shutil
@@ -29,6 +30,9 @@ from scipy.stats import norm
 import sys
 sys.path.append("../apc/apc")   # Path where apc_config and apc_funcs are located
 from apc_config import data_dir # Configuration 
+from skimage.filters.rank import entropy
+from skimage.morphology import disk
+from skimage.filters import threshold_sauvola, threshold_niblack
 
 
 # User-defined functions
@@ -38,10 +42,9 @@ flatfield_correct, drift_correct, reject_outliers, get_trace, fit_trace
 
 # User input ----------------------------------------------------------------
 
-#directory = data_dir
-#directory = data_dir/'18-12-04 D-box mutant'
-#directory = data_dir/'18-06-29 Drift correction'
-directory = data_dir/'18-11-15 Multiple Movies (different days) Per Experiment'
+directory = data_dir
+#directory = data_dir/'19-05-29 Movies 300pix300pi'
+num_trace = 10
 
 # ---------------------------------------------------------------------------
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
@@ -87,8 +90,9 @@ class Movie:
         # Flatfield correct
         if str2bool(self.info['flatfield_correct']) == True:
             print('flatfield_correct = True')
-            self.I_bin, self.I_bin_fit, self.I_flatfield, self.I_flat_bin \
-                = flatfield_correct(self.I_drift, self.bin_size)
+            self.I_bin, self.I_flatfield = flatfield_correct(self.I_drift, self.bin_size)
+#            self.I_bin, self.I_bin_fit, self.I_flatfield, self.I_flat_bin \
+#                = flatfield_correct(self.I_drift, self.bin_size)                
         else:
             print('flatfield_correct = False')
             self.I_bin = np.zeros((self.n_row, self.n_col))
@@ -140,27 +144,107 @@ class Movie:
             self.I_fit[i], self.tp_ub[i], self.tp_bu[i] = fit_trace(self.I_trace[i])
             self.I_rmsd[i] = (np.mean((self.I_trace[i]-self.I_fit[i])**2.0))**0.5
 
+        self.I_trace_all = np.ravel(self.I_trace) 
 
-    def plot_image1_max(self):
-        fig = plt.figure(figsize = (20, 10), dpi=300)            
+    def plot_clean(self):
+        # clean existing png files in the folder
+        files = os.listdir(self.dir)    
+        for file in files:
+            if file.endswith('png'):
+                os.remove(self.dir/file)    
 
-        sp = fig.add_subplot(131)  
-        I_original = np.max(self.I_original, axis=0)
-        sp.imshow(I_original, cmap=cm.inferno)
-        sp.set_title('Max intensity - original')
+    def plot_cross_section(self):
+        n = 10
+        I_row = np.squeeze(self.I_original[:,int(self.n_row/2),:])
+        I_col = np.squeeze(self.I_original[:,:,int(self.n_row/2)])
 
-        sp = fig.add_subplot(132)  
-        I_drift = np.max(self.I_drift, axis=0)
-        sp.imshow(I_drift, cmap=cm.inferno)
-        sp.set_title('Max intensity - drift')
+        fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(figsize=(20, 10), ncols=3, nrows=2)
 
-        sp = fig.add_subplot(133)  
-        I_flatfield = np.max(self.I_flatfield, axis=0)
-        sp.imshow(I_flatfield, cmap=cm.inferno)
-        sp.set_title('Max intensity - flatfield')        
+        sp1 = ax1.imshow(I_row, cmap='gray')
+        fig.colorbar(sp1, ax=ax1) 
+        ax1.set_xlabel('Row')
+        ax1.set_ylabel('Frame')
 
-        fig.savefig(self.dir/'image1_max.png')   
+        for i in range(self.n_frame):
+            x = range(self.n_row+2)
+            y = np.squeeze(I_row[i,:]).tolist()+[np.min(I_row[:,:])]+[np.max(I_row[:,:])]
+            ax2.scatter(x, y, marker='*', c=y, cmap='Reds')    
+        ax2.set_xlim([x[0], x[-2]])    
+        ax2.set_xlabel('Row')
+        ax2.set_ylabel('Intensity')       
+
+        y = np.zeros(self.n_row)
+        s = np.zeros(self.n_row)
+        for i in range(self.n_row):
+            x = np.squeeze(I_row[:,i])
+            x = x[np.argsort(x)[-n:]] 
+            y[i] = np.median(x)
+            s[i] = np.std(x) 
+        ax3.errorbar(x=range(self.n_row), y=y, yerr=s, fmt='o')
+        ax3.set_xlabel('Row')
+
+        sp4 = ax4.imshow(I_col, cmap='gray')
+        fig.colorbar(sp4, ax=ax4) 
+        ax4.set_xlabel('Col')
+        ax4.set_ylabel('Frame')
+
+        for i in range(self.n_frame):
+            x = range(self.n_col+2)
+            y = np.squeeze(I_col[i,:]).tolist()+[np.min(I_col[:,:])]+[np.max(I_col[:,:])]
+            ax5.scatter(x, y, marker='.', c=y, cmap='Reds')
+        ax5.set_xlim([x[0], x[-2]])  
+        ax5.set_xlabel('Col')
+        ax5.set_ylabel('Intensity')  
+
+        fig.tight_layout()
+        fig.savefig(self.dir/'image0_cross_section.png')   
+        plt.close(fig)         
+
+
+    def plot_image1_min_max_original(self):
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(figsize=(20, 10), ncols=2, nrows=2)
+
+        I_min = np.min(self.I_original, axis=0)
+        I_max = np.max(self.I_original, axis=0)
+
+        sp1 = ax1.imshow(I_min, cmap='gray')
+        fig.colorbar(sp1, ax=ax1) 
+        ax2.hist(I_min.ravel(), 20, histtype='step', lw=1, color='k')    
+        ax2.set_yscale('log')
+        ax2.set_xlim(0, np.max(I_max)) 
+        ax2.set_title('Min intensity - original')
+
+        sp3 = ax3.imshow(I_max, cmap='gray')
+        fig.colorbar(sp3, ax=ax3) 
+        ax4.hist(I_max.ravel(), 50, histtype='step', lw=1, color='k')                      
+        ax4.set_yscale('log')
+        ax4.set_xlim(0, np.max(I_max)) 
+        ax4.set_title('Max intensity - original')
+
+        fig.tight_layout()
+        fig.savefig(self.dir/'image1_min_max.png')   
         plt.close(fig)                                                                                                                                                                                                                                                                                                                                                                                                                                                            
+
+    def plot_image_flat(self):
+        I_max = np.squeeze(np.max(self.I_original, axis=0))
+        size = 15
+        binary_sauvola = I_max > threshold_sauvola(I_max)#, window_size=size)
+        binary_niblack = I_max > threshold_niblack(I_max)#, window_size=size)
+
+        fig, (ax1, ax3) = plt.subplots(figsize=(20, 10), ncols=2, nrows=1)
+
+        sp1 = ax1.imshow(I_max, cmap='gray')
+#        fig.colorbar(sp1, ax=ax1)
+        ax1.set_title('Max Intensity - original')
+
+        sp3 = ax3.imshow(binary_niblack, cmap='gray')
+#        fig.colorbar(sp3, ax=ax3)         
+        ax3.set_title('Binary niblack - original')
+
+        fig.tight_layout()
+        fig.savefig(self.dir/'image_entropy.png')   
+        plt.close(fig)   
+
 
     def plot_image2_drift(self):                                                     
         fig = plt.figure(figsize = (20, 10), dpi=300)    
@@ -178,45 +262,55 @@ class Movie:
 
     def plot_image3_flatfield(self):                                                     
         fig = plt.figure(figsize = (20, 10), dpi=300)    
-
-        sp = fig.add_subplot(131)  
-        sp.imshow(self.I_bin, cmap=cm.inferno)
-        sp.set_title('Max intensity - original')
  
-        sp = fig.add_subplot(132)  
-        sp.imshow(self.I_bin_fit, cmap=cm.inferno)
-        sp.set_title('Max intensity - fit')
+        sp = fig.add_subplot(131)   
+        I_drift = np.max(self.I_drift, axis=0)        
+        sp.imshow(I_drift, cmap=cm.inferno)
+        sp.set_title('Max intensity - original')
 
-        sp = fig.add_subplot(133)  
-        sp.imshow(self.I_flat_bin, cmap=cm.inferno)
+        sp = fig.add_subplot(132)    
+        sp.imshow(self.I_bin, cmap=cm.inferno)
+        sp.set_title('Max intensity - bin')
+
+        sp = fig.add_subplot(133)   
+        I_flatfield = np.max(self.I_flatfield, axis=0)
+        sp.imshow(I_flatfield, cmap=cm.inferno)
         sp.set_title('Max intensity - flatfield')
 
+        fig.tight_layout()
         fig.savefig(self.dir/'image3_flatfield.png')   
         plt.close(fig)
 
-    def plot_image4_peaks(self):
-        signals = [self.I_peaks, self.I_rmsd, np.log(self.tp_ub), np.log(self.tp_bu)]
-        titles = [
-            'Max intensity at peaks',
-            'RMSD of I_fit',
-            'Log(tp_ub)',
-            'Log(tp_bu)'
-        ]
+#        # Draw a heatmap with the numeric values in each cell
+#        f, ax = plt.subplots(figsize=(9, 6))
+#        sns.heatmap(flights, annot=True, fmt="d", linewidths=.5, ax=ax)
 
+    def plot_image4_peaks_max(self):
         fig = plt.figure(figsize = (20, 10), dpi=300)     
-        for i, (signal, title) in enumerate(zip(signals, titles)):
-            sp = fig.add_subplot(2,2,i+1)  
-            x = np.linspace(np.min(signal), np.max(signal), 100)
-            param = norm.fit(signal)     
+        sp = fig.add_subplot(1,1,1)  
+#            x = np.linspace(np.min(signal), np.max(signal), 100)
+#            param = norm.fit(signal)     
 #            pdf = norm.pdf(x, loc = param[0], scale = param[1])        
-            sp.hist(signal, 50, density=1, histtype='step', lw=2)
+        sp.hist(self.I_peaks, 20, density=1, histtype='step', lw=2)
 #            sp.plot(x, pdf, 'r', lw=2)
-#            if i > 2:
-#                sp.set_xscale('log')
-            sp.set_title(title)   
-        fig.savefig(self.dir/'image4_peaks.png')   
+        sp.set_title('Max intensity at peaks')  
+        fig.savefig(self.dir/'image4_peaks_max.png')   
         plt.close(fig)
 
+    def plot_image5_trace_all(self):
+        fig = plt.figure(figsize = (20, 10), dpi=300)     
+#            x = np.linspace(np.min(signal), np.max(signal), 100)
+#            param = norm.fit(signal)     
+#            pdf = norm.pdf(x, loc = param[0], scale = param[1])          
+        sp = fig.add_subplot(1,2,1)  
+        sp.hist(self.I_trace_all, 50, histtype='step', lw=2)
+        sp = fig.add_subplot(1,2,2)  
+        sp.hist(self.I_trace_all, 50, histtype='step', lw=2)
+        sp.set_yscale('log')
+#            sp.plot(x, pdf, 'r', lw=2)
+        sp.set_title('All intensities at peaks')  
+        fig.savefig(self.dir/'image5_trace_all.png')   
+        plt.close(fig)
 
 #        sp3 = fig1.add_subplot(133) 
 #        sp3.imshow(self.I_max, cmap=cm.gray)
@@ -256,64 +350,30 @@ class Movie:
         fig2.savefig(self.dir/'Histogram.png')
         plt.close(fig2)
                     
-    def plot_traces(self):                                                                                                                                                                                                                                                                                              
+    def plot_traces(self):      
+        # Make a Trace folder                                                                                                                                                                                                                                                                                         
         trace_dir = self.dir/'Traces'
-        if os.path.exists(trace_dir):
+        if os.path.exists(trace_dir): # Delete if already existing 
             shutil.rmtree(trace_dir)
-            os.makedirs(trace_dir)
-        else:
-            os.makedirs(trace_dir)
+        os.makedirs(trace_dir)
                 
         frame = np.arange(self.n_frame)
                 
-        n_fig = min(self.num_trace, len(self.mols))        
-        for j in range(n_fig):                 
+        n_fig = min(num_trace, len(self.I_trace))        
+        for i in range(n_fig):                 
             fig = plt.figure(100, figsize = (25, 15), dpi=300)
             sp = fig.add_subplot(111)
-            sp.plot(frame, self.mols[j].I_frame, 'k', lw=0.5, ms=3)
-    #        sp.plot(frame, self.mols[j].I_s, 'b', linewidth=1, markersize=3)
-            sp.plot(frame, self.mols[j].I_fit, 'b', lw=1, ms=3)
-            sp.plot(frame, self.mols[j].I_predict, 'r', lw=1, ms=3)            
-            sp.axhline(y=0, color='k', linestyle='dashed', lw=1)
-            sp.axhline(y=noise_cutoff, color='k', linestyle='dotted', lw=1)
-            sp.axhline(y=1, color='k', linestyle='dotted', lw=1)                
-            title_sp = '(%d, %d) (noise = %.2f)' \
-            % (self.mols[j].row, self.mols[j].col, self.mols[j].noise)
-            sp.set_title(title_sp)
+            sp.plot(frame, self.I_trace[i], 'k', lw=2)
+            sp.plot(frame, self.I_fit[i], 'b', lw=2)                      
+#            title_sp = '(%d, %d) (noise = %.2f)' \
+#            % (self.mols[j].row, self.mols[j].col, self.mols[j].noise)
+#            sp.set_title(title_sp)
             fig.subplots_adjust(wspace=0.3, hspace=0.5)
-            print("Save Trace %d (%d %%)" % (j+1, ((j+1)/n_fig)*100))
-            fig_name = 'Trace%d.png' %(j+1)
+            print("Save Trace %d (%d %%)" % (i+1, ((i+1)/n_fig)*100))
+            fig_name = 'Trace%d.png' %(i+1)
             fig.savefig(trace_dir/fig_name) 
             fig.clf()
-                        
-    def plot_drift(self, path):
-        fig8 = plt.figure(1, figsize = (20, 10), dpi=300)    
-        fig8.clf()
-        movie = self.movie
-                
-        sp1 = fig8.add_subplot(221)  
-        im1 = sp1.imshow(movie.I0s, cmap=cm.gray)
-        plt.colorbar(im1)
-        sp1.set_title('Kernel (Frame = 0)')
-        frame = movie.n_frame -1
-    
-        sp2 = fig8.add_subplot(222)  
-        r = len(movie.drift[0])
-        im2 = sp2.imshow(movie.drift[frame], cmap=cm.gray, extent = [-r,r,r,-r])
-        plt.colorbar(im2)
-        sp2.set_title('Correlation (Frame = %d)' %(frame))
-        
-        sp3 = fig8.add_subplot(223)
-        sp3.plot(movie.drift_x, 'k')
-        sp3.set_title('Drift in X')  
-    
-        sp4 = fig8.add_subplot(224)
-        sp4.plot(movie.drift_y, 'k')
-        sp4.set_title('Drift in Y') 
-    
-        fig8.savefig(self.movie_dir/'Fig8_Drift.png')   
-        plt.close(fig8)
-                  
+           
     def plot_HMM(self):
 
         log_tp_ub = np.log(self.tp_ub)
@@ -370,21 +430,24 @@ def main():
         movie.read()
 
         # Flatfield and drift correction
-        movie.correct()
+#        movie.correct()
 
         # Find spots
-        movie.find_mols()
+#        movie.find_mols()
 
         # Save the result into result.txt
         movie.save()
 
         # Plot the result
         print("\nPlotting figures...")  
-        movie.plot_image1_max()
-        movie.plot_image2_drift()          
-        movie.plot_image3_flatfield()
-        movie.plot_image4_peaks()
-              
+        movie.plot_clean()
+#        movie.plot_cross_section()
+#        movie.plot_image1_min_max_original()
+        movie.plot_image_flat()
+#        movie.plot_image2_drift()          
+#        movie.plot_image3_flatfield()        
+#        movie.plot_image4_peaks_max()
+#        movie.plot_image5_trace_all()              
 #        movie.plot_histogram()
 #        movie.plot_traces()
 #        movie.plot_HMM()
@@ -398,11 +461,20 @@ if __name__ == "__main__":
 """
 To-do
 
-* set dwell_max, dwell_min
-* Histogram of intensity
-* HMM step finding
-* Classes of binding & unbinding events
+* x/y cross-section (2D, 1D)
 
+
+
+* binary filter (sauvola or niblack) > median in each block > normalization
+* drift_correct > fitting or smoothening 
+
+* Reorganize folder arrangement > use GFP file for flatfield correction
+* Better flatfield correction using GFP
+* Displaying peak finding 
+* Better step finding algorithm > hmm vs smoothening+thresholding
+* Krammer barrier crossing 
+* Classes of binding & unbinding events
+* set dwell_max, dwell_min
 * Save results in a text
 * Seperate code to read text and combine or compare
 
