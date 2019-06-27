@@ -10,7 +10,7 @@ Created on Wed Mar 13 11:30:05 2019
 # config.py
 
 import os
-from pathlib import Path  # pathlib is seriously awesome!
+from pathlib import Path  
 from inspect import currentframe, getframeinfo
 
 fname = getframeinfo(currentframe()).filename # current file name
