@@ -20,7 +20,7 @@ from imreg_dft.imreg import translation
 from scipy.optimize import minimize
 from skimage.filters import (threshold_otsu, threshold_niblack,
                              threshold_sauvola)
-
+from scipy import ndimage
 from PIL import Image
 from tifffile import TiffFile
 import csv
@@ -73,6 +73,7 @@ def read_movie(movie_path, bin_size):
     print('[frame, row, col] = [%d, %d, %d]' %(n_frame, n_row, n_col))  
 
     return imagej_crop, imagej_metadata
+
 
 def gaussian_2d(height, center_x, center_y, width_x, width_y, offset):
     """Returns a gaussian function with the given parameters"""
@@ -138,7 +139,7 @@ def flatfield_correct1(I, bin_size):
 
     return I_bin, I_fit, I_flatfield, I_flat_bin
 
-def flatfield_correct(I, bin_size):
+def flatfield_correct2(I, bin_size):
     n_frame = np.size(I, 0)
     n_row = np.size(I, 1)
     n_col = np.size(I, 2)
