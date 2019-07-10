@@ -17,36 +17,17 @@ from __future__ import division, print_function, absolute_import
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
-import seaborn as sns
 from pathlib import Path  
 import os
-import shutil
-#from scipy.optimize import curve_fit
-from skimage.feature import peak_local_max
-from skimage.filters import median
-from skimage.morphology import disk
-from skimage.filters import rank
+#import shutil
 from scipy.stats import norm
-#import sys
-#sys.path.append("../apc/apc")   # Path where apc_config and apc_funcs are located
-#from apc_config import data_dir # Configuration 
-from skimage.filters.rank import entropy
-from skimage.morphology import disk
-from tifffile import TiffFile
-from inspect import currentframe, getframeinfo
-from imreg_dft.imreg import translation
-
-from scipy.ndimage import gaussian_filter, median_filter
-from skimage.morphology import disk
-from skimage.filters import rank
-from skimage.filters.rank import entropy
-from skimage.filters import threshold_sauvola, threshold_niblack, threshold_local
 from scipy.ndimage import gaussian_filter
-
-# User-defined functions
-#from apc_funcs import read_movie, running_avg, reject_outliers, str2bool, \
-#flatfield_correct, drift_correct, reject_outliers, get_trace, fit_trace
-
+from scipy.optimize import curve_fit
+from tifffile import TiffFile
+from imreg_dft.imreg import translation
+from skimage.feature import peak_local_max
+from skimage.filters import threshold_local
+from inspect import currentframe, getframeinfo
 fname = getframeinfo(currentframe()).filename # current file name
 current_dir = Path(fname).resolve().parent
 data_dir = Path(fname).resolve().parent.parent/'data' 
@@ -67,6 +48,17 @@ def check_outliers(I):
     mdev = np.median(dev)
     s = dev/mdev if mdev else 0.
     return s < 3
+
+
+def running_avg(x, n):
+    y = np.convolve(x, np.ones((n,))/n, mode='valid')  
+    m = int((n-1)/2)
+    return np.concatenate([np.zeros(m), y, np.zeros(m)])
+
+
+def sum_two_gaussian(x, m1, s1, f1, m2, s2, f2):
+#    x = running_avg(x,3)
+    return abs(f1)*np.exp(-(x-m1)**2/(2*s1**2)) + abs(f2)*np.exp(-(x-m2)**2/(2*s2**2))
 
 
 class Movie:
@@ -181,22 +173,22 @@ class Movie:
                     if signals:
                         self.I_bin[i*m:(i+1)*m,j*m:(j+1)*m] = np.mean(signals)
 
-            # Fill empty pixels with the mean of its neighbors 
+            # Fill empty signal with the local mean. 
             for i in range(int(self.n_row/m)):
                 for j in range(int(self.n_col/m)):
                     if self.I_bin[i*m,j*m] == 0:
                         window = self.I_bin[max(0,(i-1)*m):min((i+2)*m,self.n_row), max(0,(j-1)*m):min((j+2)*m,self.n_col)].flatten() 
-                        signals = [signal for signal in window if signal > 0]
+                        signals = [signal for signal in window if signal > 0] # Take only positive signal
                         if signals:
                             self.I_bin[i*m:(i+1)*m,j*m:(j+1)*m] = np.mean(signals)   
 
+            # Remaining empty signal will be filled with the global mean. 
             self.I_bin[self.I_bin==0] = np.mean(self.I_bin[self.I_bin>0])
 
-
-            # Smoothening 
+            # Smoothening the sharp bolder.
             self.I_bin_filter = gaussian_filter(self.I_bin, sigma=10)
 
-            # Flatfield correct
+            # Flatfield correct by normalization
             self.I_flatfield = np.array(self.I_drift)
             for i in range(self.n_frame):
                 self.I_flatfield[i,] = self.I_drift[i,] / self.I_bin_filter * np.max(self.I_bin_filter)    
@@ -209,11 +201,12 @@ class Movie:
             self.I_bin_filter = np.zeros((self.n_row, self.n_col))
             self.I_flatfield = self.I_drift.copy()
 
+        # Simple name after correction
         self.I = self.I_flatfield.copy()
         self.I_max = np.max(self.I, axis=0)
 
 
-    def find_spotss(self):
+    def find_spots(self):
         # Find local maxima from I_max
         self.peaks = peak_local_max(self.I_max, min_distance=int(self.spot_size*1.0))        
         self.n_peaks = len(self.peaks[:, 1])
@@ -224,7 +217,7 @@ class Movie:
         s = int((self.spot_size-1)/2) # Half-width of spot size
         self.I_peaks = np.zeros((self.n_peaks))
         for i in range(self.n_peaks):
-            self.I_peaks[i] = np.mean([
+            self.I_peaks[i] = np.sum([
                 self.I_max[j, k] # Mean intensity in ROI
                     for j in range(self.row[i]-s,self.row[i]+s+1) 
                     for k in range(self.col[i]-s,self.col[i]+s+1) 
@@ -235,10 +228,10 @@ class Movie:
         print('Found', len(self.good_spots), 'peaks. ')     
         print('Rejected', sum(~self.good_spots), 'outliers.')           
 
-    def find_mols(self):
 
+    def find_mols(self):
         # Fit intensity traces
-        self.I_trace = np.zeros((self.n_peaks, self.n_frame), dtype='float')
+        self.I_traces = np.zeros((self.n_peaks, self.n_frame), dtype='float')
         self.I_fit = np.zeros((self.n_peaks, self.n_frame), dtype='float')
         self.I_rmsd = np.zeros((self.n_peaks), dtype='float')
         self.tp_ub = np.zeros((self.n_peaks), dtype='float')
@@ -246,7 +239,19 @@ class Movie:
         self.dwell = [[], [], [], []]
         self.wait = [[], [], [], []]
   
-#        for i in range(self.n_peaks):
+        for i in range(self.n_peaks):
+            # Skip bad spots
+            if not self.good_spots[i]:
+                continue
+
+            # Get trace at each spot
+            r = self.row[i]
+            c = self.col[i]
+            s = int((self.spot_size-1)/2)
+            self.I_traces[i] = np.sum(np.sum(self.I[:,r-s:r+s+1,c-s:c+s+1], axis=2), axis=1)
+
+
+
 #            self.I_trace[i] = get_trace(self.I, self.row[i], self.col[i], self.spot_size)
 #            self.I_fit[i], self.tp_ub[i], self.tp_bu[i] = fit_trace(self.I_trace[i])
 #            self.I_rmsd[i] = (np.mean((self.I_trace[i]-self.I_fit[i])**2.0))**0.5
@@ -255,7 +260,7 @@ class Movie:
 
 
     def plot_clean(self):
-        # clean existing png files in the folder
+        # clean all existing png files in the folder
         files = os.listdir(self.dir)    
         for file in files:
             if file.endswith('png'):
@@ -270,14 +275,16 @@ class Movie:
 
         sp1 = ax1.imshow(I_min, cmap='gray')
         fig.colorbar(sp1, ax=ax1) 
-        ax2.hist(I_min.ravel(), 20, histtype='step', lw=1, color='k')    
+
+        ax2.hist(I_min.ravel(), 20, histtype='step', lw=2, color='k')    
         ax2.set_yscale('log')
         ax2.set_xlim(0, np.max(I_max)) 
         ax2.set_title('Min intensity - original')
 
         sp3 = ax3.imshow(I_max, cmap='gray')
         fig.colorbar(sp3, ax=ax3) 
-        ax4.hist(I_max.ravel(), 50, histtype='step', lw=1, color='k')                      
+
+        ax4.hist(I_max.ravel(), 50, histtype='step', lw=2, color='k')                      
         ax4.set_yscale('log')
         ax4.set_xlim(0, np.max(I_max)) 
         ax4.set_title('Max intensity - original')
@@ -361,7 +368,7 @@ class Movie:
         plt.close(fig)
 
 
-    def plot_image4_peaks_max(self):
+    def plot_image4_peaks(self):
         fig = plt.figure(figsize = (20, 10), dpi=300)     
 
         sp = fig.add_subplot(1,2,1)         
@@ -381,28 +388,34 @@ class Movie:
         plt.close(fig)
 
 
-    def plot_image5_trace_all(self):
+    def plot_image5_traces(self):
         fig = plt.figure(figsize = (20, 10), dpi=300)     
-#            x = np.linspace(np.min(signal), np.max(signal), 100)
-#            param = norm.fit(signal)     
-#            pdf = norm.pdf(x, loc = param[0], scale = param[1])          
+      
         sp = fig.add_subplot(1,2,1)  
-        sp.hist(self.I_trace_all, 50, histtype='step', lw=2)
+        n, bins, patches = sp.hist(self.I_traces[self.good_spots].flatten(), 50, density=True, histtype='step', lw=2, color='k')
+        sp.set_xlabel('Intensity')
+        sp.set_ylabel('Probability density')
+        sp.set_title('Probability distribution') 
+
+        x = (bins[1:]+bins[:-1])/2
+        m1 = 0.8*x[0] + 0.2*x[-1]
+        s1 = 0.1*(x[-1] - x[0]) 
+        f1 = 0.1
+        m2 = 0.2*x[0] + 0.8*x[-1]
+        s2 = 0.1*(x[-1] - x[0])
+        f2 = 0.1
+        p, cov = curve_fit(sum_two_gaussian, x, n, p0=[m1, s1, f1, m2, s2, f2])
+        x_fit = np.linspace(min(x), max(x), 1000)
+        sp.plot(x_fit, sum_two_gaussian(x_fit, *p), 'r')
+    
         sp = fig.add_subplot(1,2,2)  
-        sp.hist(self.I_trace_all, 50, histtype='step', lw=2)
-        sp.set_yscale('log')
-#            sp.plot(x, pdf, 'r', lw=2)
-        sp.set_title('All intensities at peaks')  
-        fig.savefig(self.dir/'image5_trace_all.png')   
+        sp.step(x, -np.log(n), where='mid', c='k', lw=2)
+        sp.set_xlabel('Intensity')
+        sp.set_ylabel('Free Energy')  
+
+        fig.savefig(self.dir/'image5_traces.png')   
         plt.close(fig)
 
-#        sp3 = fig1.add_subplot(133) 
-#        sp3.imshow(self.I_max, cmap=cm.gray)
-#        for j in range(len(self.mols)):
-#            sp3.plot(self.mols[j].col, self.mols[j].row, 'ro', ms=2, alpha=0.5)  
-#        title = 'Molecules = %d, Spot size = %d' % (len(self.mols), self.spot_size)  
-#        sp3.set_title(title)      
-        
 
     def plot_histogram(self):            
         fig2 = plt.figure(2, figsize = (20, 10), dpi=300)  
@@ -536,8 +549,8 @@ def main():
         movie.plot_image1_cross_section()
         movie.plot_image2_drift()          
         movie.plot_image3_flatfield()        
-        movie.plot_image4_peaks_max()
-#        movie.plot_image5_trace_all()              
+        movie.plot_image4_peaks()
+        movie.plot_image5_traces()              
 #        movie.plot_histogram()
 #        movie.plot_traces()
 #        movie.plot_HMM()
@@ -558,4 +571,4 @@ To-do
 * Save results in a text
 * Seperate code to read text and combine or compare
 
-
+"""
