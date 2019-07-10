@@ -32,10 +32,16 @@ from scipy.stats import norm
 #from apc_config import data_dir # Configuration 
 from skimage.filters.rank import entropy
 from skimage.morphology import disk
-from skimage.filters import threshold_sauvola, threshold_niblack
 from tifffile import TiffFile
 from inspect import currentframe, getframeinfo
 from imreg_dft.imreg import translation
+
+from scipy.ndimage import gaussian_filter, median_filter
+from skimage.morphology import disk
+from skimage.filters import rank
+from skimage.filters.rank import entropy
+from skimage.filters import threshold_sauvola, threshold_niblack, threshold_local
+from scipy.ndimage import gaussian_filter
 
 # User-defined functions
 #from apc_funcs import read_movie, running_avg, reject_outliers, str2bool, \
@@ -47,74 +53,20 @@ data_dir = Path(fname).resolve().parent.parent/'data'
 
 # User input ----------------------------------------------------------------
 
-#directory = data_dir
-directory = data_dir/'19-05-29 Movies 300pix300pi'
-num_trace = 10
+directory = data_dir
+#directory = data_dir/'19-05-29 Movies 300pix300pi'
 
 # ---------------------------------------------------------------------------
 
 def str2bool(v):
   return v.lower() in ("yes", "true", "t", "1")
 
-def drift_correct(I):
-    I_ref = I[int(len(I)/2),] # Mid frame as a reference frame
-#    I_ref = np.max(I, axis=0)
 
-    # Translation as compared with I_ref
-    d_row = np.zeros(len(I), dtype='int')
-    d_col = np.zeros(len(I), dtype='int')
-    for i, I_frame in enumerate(I):
-        result = translation(I_ref, I_frame)
-        d_row[i] = round(result['tvec'][0])
-        d_col[i] = round(result['tvec'][1])      
-
-    # Changes of translation between the consecutive frames
-    dd_row = d_row[1:] - d_row[:-1]
-    dd_col = d_col[1:] - d_col[:-1]
-
-    # Sudden jump in translation set to zero
-    step_limit = 2
-    dd_row[abs(dd_row)>step_limit] = 0
-    dd_col[abs(dd_col)>step_limit] = 0
-
-    # Adjusted translation
-    d_row[0] = 0
-    d_col[0] = 0
-    d_row[1:] = np.cumsum(dd_row)
-    d_col[1:] = np.cumsum(dd_col)
-
-    # Offset mid to zero
-    drift_row = d_row - int(np.median(d_row))
-    drift_col = d_col - int(np.median(d_col))
-
-    # Translate images
-    for i in range(len(I)):
-        I[i,] = np.roll(I[i,], drift_row[i], axis=0)
-        I[i,] = np.roll(I[i,], drift_col[i], axis=1)        
-    
-    return drift_row, drift_col, I
-
-def flatfield_correct(I, GFP, bin_size):
-
-    n_frame = np.size(I, 0)
-    n_row = np.size(I, 1)
-    n_col = np.size(I, 2)
-
-    # Binning
-    GFP_bin = np.zeros((n_row, n_col))
-    m = bin_size    
-    for i in range(int(n_row/m)):
-        for j in range(int(n_col/m)):
-            GFP_bin[i*m:(i+1)*m, j*m:(j+1)*m] = np.median(GFP[i*m:(i+1)*m, j*m:(j+1)*m])
-
-    # Smoothening 
-
-    # Flatfield correct
-    I_flatfield = np.array(I)
-    for i in range(n_frame):
-        I_flatfield[i,] = I[i,] / GFP_bin * np.max(GFP_bin)
-
-    return GFP_bin, I_flatfield         
+def check_outliers(I):
+    dev = np.abs(I - np.median(I))
+    mdev = np.median(dev)
+    s = dev/mdev if mdev else 0.
+    return s < 3
 
 
 class Movie:
@@ -149,79 +101,141 @@ class Movie:
                 f.write(item+'\n')
 
         # Crop the image to make the size integer multiple of 10
-        self.bin_size = 10
+        self.bin_size = 20
         self.n_frame = np.size(imagej_hyperstack, 0)
         n_row = np.size(imagej_hyperstack, 1)
         self.n_row = int(int(n_row/self.bin_size)*self.bin_size)        
         n_col = np.size(imagej_hyperstack, 2) 
         self.n_col = int(int(n_col/self.bin_size)*self.bin_size)
-        self.I_original = imagej_hyperstack[:,:n_row,:n_col]
+        self.I_original = imagej_hyperstack[:,:self.n_row,:self.n_col]
 
         print('[frame, row, col] = [%d, %d, %d]' %(self.n_frame, self.n_row, self.n_col))  
 
 
-    def correct(self):
+    def drift_correct(self):
         # Drift correct
         if str2bool(self.info['drift_correct']) == True:
             print('drift_correct = True')
-            self.drift_row, self.drift_col, self.I_drift \
-                = drift_correct(self.I_original)
+
+            I = self.I_original.copy()
+            I_ref = I[int(len(I)/2),] # Mid frame as a reference frame
+
+            # Translation as compared with I_ref
+            d_row = np.zeros(len(I), dtype='int')
+            d_col = np.zeros(len(I), dtype='int')
+            for i, I_frame in enumerate(I):
+                result = translation(I_ref, I_frame)
+                d_row[i] = round(result['tvec'][0])
+                d_col[i] = round(result['tvec'][1])      
+
+            # Changes of translation between the consecutive frames
+            dd_row = d_row[1:] - d_row[:-1]
+            dd_col = d_col[1:] - d_col[:-1]
+
+            # Sudden jump in translation set to zero
+            step_limit = 1
+            dd_row[abs(dd_row)>step_limit] = 0
+            dd_col[abs(dd_col)>step_limit] = 0
+
+            # Adjusted translation
+            d_row[0] = 0
+            d_col[0] = 0
+            d_row[1:] = np.cumsum(dd_row)
+            d_col[1:] = np.cumsum(dd_col)
+
+            # Offset mid to zero
+            self.drift_row = d_row - int(np.median(d_row))
+            self.drift_col = d_col - int(np.median(d_col))
+
+            # Translate images
+            self.I_drift = self.I_original.copy()
+            for i in range(len(I)):
+                self.I_drift[i,] = np.roll(self.I_original[i,], self.drift_row[i], axis=0)
+                self.I_drift[i,] = np.roll(self.I_original[i,], self.drift_col[i], axis=1)        
         else:
             print('drift_correct = False')
             self.drift_row = np.zeros((self.n_frame))
             self.drift_col = np.zeros((self.n_frame))
             self.I_drift = np.array(self.I_original)
         
+
+    def flatfield_correct(self):
+
+        self.I_drift_max = np.max(self.I_drift, axis=0)
+
         # Flatfield correct
         if str2bool(self.info['flatfield_correct']) == True:
             print('flatfield_correct = True')
 
-            # Read GFP.tif
-            gfp = self.dir/'GFP.tif'
-            if gfp.exists():
-                print('Reading GFP.tif.')
-                with TiffFile(gfp) as tif:
-                    GFP = tif.asarray()
-                    if GFP.ndim == 2: # if only one image was taken
-                        self.GFP = GFP[:self.n_row,:self.n_col]
-                    else: # if multiple frames are taken, just take the 1st image
-                        self.GFP = GFP[0,:self.n_row,:self.n_col]
-                self.GFP_bin, self.I_flatfield = flatfield_correct(self.I_drift, self.GFP, self.bin_size)
-            else:
-                print('GFP.tif does not exist.')
+            # Masking from local threshold        
+            self.mask = self.I_drift_max > threshold_local(self.I_drift_max, block_size=31, offset=-31) 
+            self.I_mask = self.I_drift_max*self.mask
+
+            # Local averaging signals
+            self.I_bin = np.zeros((self.n_row, self.n_col))
+            m = self.bin_size
+            for i in range(int(self.n_row/m)):
+                for j in range(int(self.n_col/m)):
+                    window = self.I_mask[i*m:(i+1)*m, j*m:(j+1)*m].flatten()          
+                    signals = [signal for signal in window if signal > 0]
+                    if signals:
+                        self.I_bin[i*m:(i+1)*m,j*m:(j+1)*m] = np.mean(signals)
+
+            # Fill empty pixels with the mean of its neighbors 
+            for i in range(int(self.n_row/m)):
+                for j in range(int(self.n_col/m)):
+                    if self.I_bin[i*m,j*m] == 0:
+                        window = self.I_bin[max(0,(i-1)*m):min((i+2)*m,self.n_row), max(0,(j-1)*m):min((j+2)*m,self.n_col)].flatten() 
+                        signals = [signal for signal in window if signal > 0]
+                        if signals:
+                            self.I_bin[i*m:(i+1)*m,j*m:(j+1)*m] = np.mean(signals)   
+
+            self.I_bin[self.I_bin==0] = np.mean(self.I_bin[self.I_bin>0])
+
+
+            # Smoothening 
+            self.I_bin_filter = gaussian_filter(self.I_bin, sigma=10)
+
+            # Flatfield correct
+            self.I_flatfield = np.array(self.I_drift)
+            for i in range(self.n_frame):
+                self.I_flatfield[i,] = self.I_drift[i,] / self.I_bin_filter * np.max(self.I_bin_filter)    
+
         else:
             print('flatfield_correct = False')
-            self.GFP_bin = np.zeros((self.n_row, self.n_col))
+            self.mask = np.zeros((self.n_row, self.n_col))
+            self.I_mask = np.zeros((self.n_row, self.n_col))
+            self.I_bin = np.zeros((self.n_row, self.n_col))
+            self.I_bin_filter = np.zeros((self.n_row, self.n_col))
             self.I_flatfield = self.I_drift.copy()
 
         self.I = self.I_flatfield.copy()
         self.I_max = np.max(self.I, axis=0)
 
 
-    def find_mols(self):
+    def find_peaks(self):
         # Find local maxima from I_max
-        peaks = peak_local_max(self.I_max, min_distance=int(self.spot_size*1.5))        
-        n_peaks = len(peaks[:, 1])
-        row = peaks[::-1,0]
-        col = peaks[::-1,1]
-        print('Found', n_peaks, 'peaks. ')    
+        self.peaks = peak_local_max(self.I_max, min_distance=int(self.spot_size*1.0))        
+        self.n_peaks = len(self.peaks[:, 1])
+        self.row = self.peaks[::-1,0]
+        self.col = self.peaks[::-1,1]
 
         # Get the intensity of the peaks
-        s = int((self.spot_size-1)/2)
-        I_peaks = np.zeros((n_peaks))
-        for i in range(n_peaks):
-            r = row[i]
-            c = col[i]
-            I_peaks[i] = np.mean([
-                self.I_max[i, j] # Mean intensity in ROI
-                for i in range(r-s,r+s+1) 
-                for j in range(c-s,c+s+1) 
+        s = int((self.spot_size-1)/2) # Half-width of spot size
+        self.I_peaks = np.zeros((self.n_peaks))
+        for i in range(self.n_peaks):
+            self.I_peaks[i] = np.mean([
+                self.I_max[j, k] # Mean intensity in ROI
+                    for j in range(self.row[i]-s,self.row[i]+s+1) 
+                    for k in range(self.col[i]-s,self.col[i]+s+1) 
             ])
       
-        # Reject outliers and fitting to gaussian
-        self.I_peaks, self.row, self.col = reject_outliers(I_peaks, row, col)
-        self.n_peaks = len(self.I_peaks)   
-        print('Rejected', n_peaks-self.n_peaks, 'outliers.')           
+        # Find outliers based on the intensity 
+        self.good_spots = check_outliers(self.I_peaks) 
+        print('Found', len(self.good_spots), 'peaks. ')     
+        print('Rejected', sum(~self.good_spots), 'outliers.')           
+
+    def find_mols(self):
 
         # Fit intensity traces
         self.I_trace = np.zeros((self.n_peaks, self.n_frame), dtype='float')
@@ -229,16 +243,16 @@ class Movie:
         self.I_rmsd = np.zeros((self.n_peaks), dtype='float')
         self.tp_ub = np.zeros((self.n_peaks), dtype='float')
         self.tp_bu = np.zeros((self.n_peaks), dtype='float')
-        is_good = np.zeros((self.n_peaks), dtype='bool')
         self.dwell = [[], [], [], []]
         self.wait = [[], [], [], []]
   
-        for i in range(self.n_peaks):
-            self.I_trace[i] = get_trace(self.I, self.row[i], self.col[i], self.spot_size)
-            self.I_fit[i], self.tp_ub[i], self.tp_bu[i] = fit_trace(self.I_trace[i])
-            self.I_rmsd[i] = (np.mean((self.I_trace[i]-self.I_fit[i])**2.0))**0.5
+#        for i in range(self.n_peaks):
+#            self.I_trace[i] = get_trace(self.I, self.row[i], self.col[i], self.spot_size)
+#            self.I_fit[i], self.tp_ub[i], self.tp_bu[i] = fit_trace(self.I_trace[i])
+#            self.I_rmsd[i] = (np.mean((self.I_trace[i]-self.I_fit[i])**2.0))**0.5
+#
+#        self.I_trace_all = np.ravel(self.I_trace) 
 
-        self.I_trace_all = np.ravel(self.I_trace) 
 
     def plot_clean(self):
         # clean existing png files in the folder
@@ -248,55 +262,7 @@ class Movie:
                 os.remove(self.dir/file)    
 
 
-    def plot_image0_cross_section(self):
-        n = 10
-        I_row = np.squeeze(self.I_original[:,int(self.n_row/2),:])
-        I_col = np.squeeze(self.I_original[:,:,int(self.n_row/2)])
-
-        fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(figsize=(20, 10), ncols=3, nrows=2)
-
-        sp1 = ax1.imshow(I_row, cmap='gray')
-        fig.colorbar(sp1, ax=ax1) 
-        ax1.set_xlabel('Row')
-        ax1.set_ylabel('Frame')
-
-        for i in range(self.n_frame):
-            x = range(self.n_row+2)
-            y = np.squeeze(I_row[i,:]).tolist()+[np.min(I_row[:,:])]+[np.max(I_row[:,:])]
-            ax2.scatter(x, y, marker='*', c=y, cmap='Reds')    
-        ax2.set_xlim([x[0], x[-2]])    
-        ax2.set_xlabel('Row')
-        ax2.set_ylabel('Intensity')       
-
-        y = np.zeros(self.n_row)
-        s = np.zeros(self.n_row)
-        for i in range(self.n_row):
-            x = np.squeeze(I_row[:,i])
-            x = x[np.argsort(x)[-n:]] 
-            y[i] = np.median(x)
-            s[i] = np.std(x) 
-        ax3.errorbar(x=range(self.n_row), y=y, yerr=s, fmt='o')
-        ax3.set_xlabel('Row')
-
-        sp4 = ax4.imshow(I_col, cmap='gray')
-        fig.colorbar(sp4, ax=ax4) 
-        ax4.set_xlabel('Col')
-        ax4.set_ylabel('Frame')
-
-        for i in range(self.n_frame):
-            x = range(self.n_col+2)
-            y = np.squeeze(I_col[i,:]).tolist()+[np.min(I_col[:,:])]+[np.max(I_col[:,:])]
-            ax5.scatter(x, y, marker='.', c=y, cmap='Reds')
-        ax5.set_xlim([x[0], x[-2]])  
-        ax5.set_xlabel('Col')
-        ax5.set_ylabel('Intensity')  
-
-        fig.tight_layout()
-        fig.savefig(self.dir/'image0_cross_section.png')   
-        plt.close(fig)         
-
-
-    def plot_image1_min_max_original(self):
+    def plot_image0_min_max_original(self):
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(figsize=(20, 10), ncols=2, nrows=2)
 
         I_min = np.min(self.I_original, axis=0)
@@ -317,45 +283,78 @@ class Movie:
         ax4.set_title('Max intensity - original')
 
         fig.tight_layout()
-        fig.savefig(self.dir/'image1_min_max.png')   
+        fig.savefig(self.dir/'image0_min_max.png')   
         plt.close(fig)                                                                                                                                                                                                                                                                                                                                                                                                                                                            
+
+
+    def plot_image1_cross_section(self):
+        I_row = np.squeeze(self.I_original[:,int(self.n_row/2),:])
+        I_col = np.squeeze(self.I_original[:,:,int(self.n_row/2)])
+
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(figsize=(20, 10), ncols=2, nrows=2)
+
+        sp1 = ax1.imshow(I_row, cmap='gray')
+        ax1.set_xlabel('Row')
+        ax1.set_ylabel('Frame')
+
+        sp2 = ax2.imshow(I_col, cmap='gray')
+        ax2.set_xlabel('Col')
+        ax2.set_ylabel('Frame')
+
+        ax3.plot(np.max(I_row, axis=0), 'ko-')
+        ax3.set_xlim([0, self.n_row])
+        ax3.set_xlabel('Row')
+
+        ax4.plot(np.max(I_col, axis=0), 'ko-')
+        ax4.set_xlim([0, self.n_col])
+        ax4.set_xlabel('Col')
+
+        fig.tight_layout()
+        fig.savefig(self.dir/'image1_cross_section.png')   
+        plt.close(fig)         
 
 
     def plot_image2_drift(self):                                                     
         fig = plt.figure(figsize = (20, 10), dpi=300)    
 
         sp = fig.add_subplot(211)  
-        sp.plot(self.drift_row)
+        sp.plot(self.drift_row, 'k')
         sp.set_title('Drift in row')
 
         sp = fig.add_subplot(212)  
-        sp.plot(self.drift_col)
+        sp.plot(self.drift_col, 'k')
         sp.set_title('Drift in col')
 
+        fig.tight_layout()
         fig.savefig(self.dir/'image2_drift.png')   
         plt.close(fig)
 
 
     def plot_image3_flatfield(self):                                                     
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(figsize=(20, 10), ncols=2, nrows=2)
+        fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(figsize=(20, 10), ncols=3, nrows=2)
 
-        sp1 = ax1.imshow(self.GFP, cmap=cm.inferno)
+        sp1 = ax1.imshow(self.I_drift_max, cmap=cm.gray)
         fig.colorbar(sp1, ax=ax1) 
-        ax1.set_title('GFP')
+        ax1.set_title('Max intensity - original')      
+  
+        sp2 = ax2.imshow(self.mask, cmap=cm.gray)
+        ax2.set_title('Mask')           
 
-        sp2 = ax2.imshow(self.GFP_bin, cmap=cm.inferno)
-        fig.colorbar(sp2, ax=ax2) 
-        ax2.set_title('GFP - bin')
-
-        I_drift = np.max(self.I_drift, axis=0)    
-        sp3 = ax3.imshow(I_drift, cmap=cm.inferno)
+        sp3 = ax3.imshow(self.I_mask, cmap=cm.gray)
         fig.colorbar(sp3, ax=ax3) 
-        ax3.set_title('Max intensity - original')        
+        ax3.set_title('Max intensity - Mask')
 
-        I_flatfield = np.max(self.I_flatfield, axis=0)
-        sp4 = ax4.imshow(I_flatfield, cmap=cm.inferno)
+        sp4 = ax4.imshow(self.I_bin, cmap=cm.gray)
         fig.colorbar(sp4, ax=ax4) 
-        ax4.set_title('Max intensity - flatfield')
+        ax4.set_title('Intensity - bin')
+
+        sp5 = ax5.imshow(self.I_bin_filter, cmap=cm.gray)
+        fig.colorbar(sp5, ax=ax5) 
+        ax5.set_title('Intensity - bin filter')        
+
+        sp6 = ax6.imshow(self.I_max, cmap=cm.gray)
+        fig.colorbar(sp6, ax=ax6) 
+        ax6.set_title('Max intensity - flatfield')
 
         fig.tight_layout()
         fig.savefig(self.dir/'image3_flatfield.png')   
@@ -364,15 +363,23 @@ class Movie:
 
     def plot_image4_peaks_max(self):
         fig = plt.figure(figsize = (20, 10), dpi=300)     
-        sp = fig.add_subplot(1,1,1)  
-#            x = np.linspace(np.min(signal), np.max(signal), 100)
-#            param = norm.fit(signal)     
-#            pdf = norm.pdf(x, loc = param[0], scale = param[1])        
-        sp.hist(self.I_peaks, 20, density=1, histtype='step', lw=2)
-#            sp.plot(x, pdf, 'r', lw=2)
+
+        sp = fig.add_subplot(1,2,1)         
+        sp.imshow(self.I_max, cmap=cm.gray)
+        color = [['b','r'][int(i)] for i in self.good_spots] 
+        sp.scatter(self.col, self.row, lw=0.8, s=50, facecolors='none', edgecolors=color)
         sp.set_title('Max intensity at peaks')  
+
+        sp = fig.add_subplot(1,2,2)    
+        bins = np.linspace(min(self.I_peaks), max(self.I_peaks), 30)     
+        sp.hist(self.I_peaks, bins = bins, histtype='step', lw=2, color='b')
+        sp.hist(self.I_peaks[self.good_spots], bins = bins, histtype='step', lw=2, color='r')
+        sp.set_title('Max intensity distribution')  
+
+        fig.tight_layout()
         fig.savefig(self.dir/'image4_peaks_max.png')   
         plt.close(fig)
+
 
     def plot_image5_trace_all(self):
         fig = plt.figure(figsize = (20, 10), dpi=300)     
@@ -427,6 +434,7 @@ class Movie:
         fig2.savefig(self.dir/'Histogram.png')
         plt.close(fig2)
                     
+
     def plot_traces(self):      
         # Make a Trace folder                                                                                                                                                                                                                                                                                         
         trace_dir = self.dir/'Traces'
@@ -451,6 +459,7 @@ class Movie:
             fig.savefig(trace_dir/fig_name) 
             fig.clf()
            
+
     def plot_HMM(self):
 
         log_tp_ub = np.log(self.tp_ub)
@@ -480,8 +489,7 @@ class Movie:
     def save(self):
         pass        
       
-
-                       
+                    
 def main():
     # Find all the movies (*.tif) in the directory tree
     movie_paths = [fn for fn in directory.glob('**/*.tif')
@@ -509,10 +517,14 @@ def main():
         movie.read()
 
         # Flatfield and drift correction
-        movie.correct()
+        movie.drift_correct()
+        movie.flatfield_correct()
+
+        # Find peaks
+        movie.find_peaks()
 
         # Find spots
-#        movie.find_mols()
+        movie.find_mols()
 
         # Save the result into result.txt
         movie.save()
@@ -520,11 +532,11 @@ def main():
         # Plot the result
         print("\nPlotting figures...")  
         movie.plot_clean()
-        movie.plot_image0_cross_section()
-        movie.plot_image1_min_max_original()
+        movie.plot_image0_min_max_original()        
+        movie.plot_image1_cross_section()
         movie.plot_image2_drift()          
         movie.plot_image3_flatfield()        
-#        movie.plot_image4_peaks_max()
+        movie.plot_image4_peaks_max()
 #        movie.plot_image5_trace_all()              
 #        movie.plot_histogram()
 #        movie.plot_traces()
@@ -539,32 +551,11 @@ if __name__ == "__main__":
 """
 To-do
 
-* x/y cross-section (2D, 1D)
-
-
-
-* binary filter (sauvola or niblack) > median in each block > normalization
-* drift_correct > fitting or smoothening 
-
-* Reorganize folder arrangement > use GFP file for flatfield correction
-* Better flatfield correction using GFP
-* Displaying peak finding 
 * Better step finding algorithm > hmm vs smoothening+thresholding
 * Krammer barrier crossing 
 * Classes of binding & unbinding events
 * set dwell_max, dwell_min
 * Save results in a text
 * Seperate code to read text and combine or compare
-
------------------------------------------------------------------
-Done
-
-* read tiff meta data (19-05-31)
-* find movies in the subfolder (19-06-06)
-* read info.txt for the parameters (19-06-06)
-* Flat field correction: max > bin > fit > norm (19-06-12)
-* Drift correction (19-06-15)
-"""
-
 
 
