@@ -213,7 +213,7 @@ class Movie:
         self.I_max = np.max(self.I, axis=0)
 
 
-    def find_peaks(self):
+    def find_spotss(self):
         # Find local maxima from I_max
         self.peaks = peak_local_max(self.I_max, min_distance=int(self.spot_size*1.0))        
         self.n_peaks = len(self.peaks[:, 1])
@@ -520,10 +520,10 @@ def main():
         movie.drift_correct()
         movie.flatfield_correct()
 
-        # Find peaks
-        movie.find_peaks()
-
         # Find spots
+        movie.find_spots()
+
+        # Find molecules
         movie.find_mols()
 
         # Save the result into result.txt
