@@ -53,9 +53,11 @@ def is_inlier(I, m=4):
 
 
 def running_avg(x, n):
-    y = np.convolve(x, np.ones((n,))/n, mode='valid')  
     m = int((n-1)/2)
-    return np.concatenate([np.ones(m)*y[0], y, np.ones(m)*y[-1]])
+    y =  np.convolve(x, np.ones((n,))/n, mode='valid') 
+    z = [np.round(i) for i in y]
+    k = np.asarray(z[:1]*m + z + z[-1:]*m, dtype=int)
+    return k
 
 
 def sum_two_gaussian(x, m1, s1, f1, m2, s2, f2):
@@ -212,12 +214,16 @@ class Movie:
             d_col[1:] = np.cumsum(dd_col)
 
             # Offset mid to zero
-            self.drift_row = d_row - d_row[0]
-            self.drift_col = d_col - d_col[0]
+            self.drift_row = d_row 
+            self.drift_col = d_col      
 
-#            # Running avg
-#            self.drift_row = np.round(running_avg(self.drift_row, 3))
-#            self.drift_col = np.round(running_avg(self.drift_col, 3))          
+            # Running avg
+            self.drift_row = running_avg(self.drift_row, 5)
+            self.drift_col = running_avg(self.drift_col, 5)      
+
+            # Offset to zero
+            self.drift_row = self.drift_row - self.drift_row[0]  
+            self.drift_col = self.drift_col - self.drift_col[0]  
 
             # Translate images
             for i in range(len(I)):
@@ -415,13 +421,13 @@ class Movie:
 
 
     def plot1_original_min_max(self):
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(figsize=(20, 10), ncols=2, nrows=2)
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(figsize=(20, 10), ncols=2, nrows=2, dpi=300)
 
         I_min = np.min(self.I_original, axis=0)
         I_max = np.max(self.I_original, axis=0)
 
-        sp1 = ax1.imshow(I_min, cmap='gray')
-        fig.colorbar(sp1, ax=ax1) 
+        sp = ax1.imshow(I_min, cmap='gray')
+        fig.colorbar(sp, ax=ax1) 
 
         ax2.hist(I_min.ravel(), 20, histtype='step', lw=2, color='k')    
         ax2.set_yscale('log')
@@ -430,14 +436,14 @@ class Movie:
         ax2.set_ylabel('Counts')
         ax2.set_title('Min projection - original')
 
-        sp3 = ax3.imshow(I_max, cmap='gray')
-        fig.colorbar(sp3, ax=ax3) 
+        sp = ax3.imshow(I_max, cmap='gray')
+        fig.colorbar(sp, ax=ax3) 
 
         ax4.hist(I_max.ravel(), 50, histtype='step', lw=2, color='k')                      
         ax4.set_yscale('log')
         ax4.set_xlim(0, np.max(I_max)) 
-        ax2.set_xlabel('Intensity')
-        ax2.set_ylabel('Counts')
+        ax4.set_xlabel('Intensity')
+        ax4.set_ylabel('Counts')
         ax4.set_title('Max projection - original')
 
         fig.tight_layout()
@@ -449,29 +455,29 @@ class Movie:
         if str2bool(self.info['flatfield_correct']) == False:
             return None
 
-        fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(figsize=(20, 10), ncols=3, nrows=2)
+        fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(figsize=(20, 10), ncols=3, nrows=2, dpi=300)
 
-        sp1 = ax1.imshow(self.I_offset_max, cmap=cm.gray)
-        fig.colorbar(sp1, ax=ax1) 
+        sp = ax1.imshow(self.I_offset_max, cmap=cm.gray)
+        fig.colorbar(sp, ax=ax1) 
         ax1.set_title('Max intensity - original')      
   
-        sp2 = ax2.imshow(self.mask, cmap=cm.gray)
+        ax2.imshow(self.mask, cmap=cm.gray)
         ax2.set_title('Mask')           
 
-        sp3 = ax3.imshow(self.I_bin, cmap=cm.gray)
-        fig.colorbar(sp3, ax=ax3) 
+        sp = ax3.imshow(self.I_bin, cmap=cm.gray)
+        fig.colorbar(sp, ax=ax3) 
         ax3.set_title('Intensity - bin')
 
-        sp4 = ax4.imshow(self.I_bin_filter, cmap=cm.gray)
-        fig.colorbar(sp4, ax=ax4) 
+        sp = ax4.imshow(self.I_bin_filter, cmap=cm.gray)
+        fig.colorbar(sp, ax=ax4) 
         ax4.set_title('Intensity - bin filter')        
 
-        sp5 = ax5.imshow(self.I_max, cmap=cm.gray)
-        fig.colorbar(sp5, ax=ax5) 
+        sp = ax5.imshow(self.I_max, cmap=cm.gray)
+        fig.colorbar(sp, ax=ax5) 
         ax5.set_title('Max intensity - flatfield')
 
-        sp6 = ax6.imshow(self.I_flatfield_bin, cmap=cm.gray)
-        fig.colorbar(sp6, ax=ax6) 
+        sp = ax6.imshow(self.I_flatfield_bin, cmap=cm.gray)
+        fig.colorbar(sp, ax=ax6) 
         ax6.set_title('Intensity flatfield - bin')
 
         fig.tight_layout()
@@ -481,23 +487,21 @@ class Movie:
 
     def plot3_drift(self):                      
         if str2bool(self.info['drift_correct']) == False:
-            return None
+            return None  
 
-        fig = plt.figure(figsize = (20, 10), dpi=300)    
+        fig, ((ax1), (ax2)) = plt.subplots(figsize=(20, 10), ncols=1, nrows=2, dpi=300)
 
-        sp = fig.add_subplot(211)  
-        sp.plot(self.drift_row, 'k')
-        sp.set_yticks(np.arange(min(self.drift_row), max(self.drift_row)+1, 1.0))
-        sp.set_xlabel('Frame')
-        sp.set_ylabel('Pixel')
-        sp.set_title('Drift in row')
+        ax1.plot(self.drift_row, 'k')
+        ax1.set_yticks(np.arange(min(self.drift_row), max(self.drift_row)+1, 1.0))
+        ax1.set_xlabel('Frame')
+        ax1.set_ylabel('Pixel')
+        ax1.set_title('Drift in row')
 
-        sp = fig.add_subplot(212)  
-        sp.plot(self.drift_col, 'k')
-        sp.set_yticks(np.arange(min(self.drift_col), max(self.drift_col)+1, 1.0))
-        sp.set_xlabel('Frame')
-        sp.set_ylabel('Pixel')
-        sp.set_title('Drift in column')
+        ax2.plot(self.drift_col, 'k')
+        ax2.set_yticks(np.arange(min(self.drift_col), max(self.drift_col)+1, 1.0))
+        ax2.set_xlabel('Frame')
+        ax2.set_ylabel('Pixel')
+        ax2.set_title('Drift in column')
 
         fig.tight_layout()
         fig.savefig(self.dir/'plot3_drift.png')   
@@ -508,13 +512,13 @@ class Movie:
         I_row = np.squeeze(self.I[:,int(self.n_row/2),:])
         I_col = np.squeeze(self.I[:,:,int(self.n_row/2)])
 
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(figsize=(20, 10), ncols=2, nrows=2)
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(figsize=(20, 10), ncols=2, nrows=2, dpi=300)
 
-        sp1 = ax1.imshow(I_row, cmap='gray')
+        ax1.imshow(I_row, cmap='gray')
         ax1.set_xlabel('Row')
         ax1.set_ylabel('Frame')
 
-        sp2 = ax2.imshow(I_col, cmap='gray')
+        ax2.imshow(I_col, cmap='gray')
         ax2.set_xlabel('Column')
         ax2.set_ylabel('Frame')
 
@@ -532,32 +536,35 @@ class Movie:
 
 
     def plot5_spot_min_max(self):
-        fig = plt.figure(figsize = (20, 10), dpi=300)     
+        fig, (ax1, ax2) = plt.subplots(figsize=(20, 10), ncols=2, nrows=1, dpi=300) 
 
-        sp = fig.add_subplot(121)
         bins = np.linspace(min(self.peak_min), max(self.peak_min), 50)     
-        sp.hist(self.peak_min, bins = bins, histtype='step', lw=2, color='b')
-        sp.hist(self.peak_min[self.is_peak_min_inlier], bins = bins, histtype='step', lw=2, color='r')        
-        sp.set_title('Intensity min')
+        ax1.hist(self.peak_min, bins = bins, histtype='step', lw=2, color='b')
+        ax1.hist(self.peak_min[self.is_peak_min_inlier], bins = bins, histtype='step', lw=2, color='r')   
+        ax1.set_xlabel('Intensity')
+        ax1.set_ylabel('Counts')     
+        ax1.set_title('Intensity min')
 
-        sp = fig.add_subplot(122)
         bins = np.linspace(min(self.peak_max), max(self.peak_max), 50)     
-        sp.hist(self.peak_max, bins = bins, histtype='step', lw=2, color='b')
-        sp.hist(self.peak_max[self.is_peak_max_inlier], bins = bins, histtype='step', lw=2, color='r')
-        sp.set_title('Intensity max')
+        ax2.hist(self.peak_max, bins = bins, histtype='step', lw=2, color='b')
+        ax2.hist(self.peak_max[self.is_peak_max_inlier], bins = bins, histtype='step', lw=2, color='r')
+        ax2.set_xlabel('Intensity')
+        ax2.set_ylabel('Counts')    
+        ax2.set_title('Intensity max')
 
         fig.savefig(self.dir/'plot5_spot_min_max.png')   
         plt.close(fig)
 
 
     def plot6_spot(self):
-        fig = plt.figure(figsize = (20, 10), dpi=300)    
-
-        sp = fig.add_subplot(111)         
-        sp.imshow(self.I_max, cmap=cm.gray)
+        fig, (ax1) = plt.subplots(figsize=(20, 10), ncols=1, nrows=1, dpi=300)  
+      
+        ax1.imshow(self.I_max, cmap=cm.gray)
         color = [['b','r'][int(i)] for i in self.is_peak_inlier] 
-        sp.scatter(self.peak_col, self.peak_row, lw=0.8, s=50, facecolors='none', edgecolors=color)
-        sp.set_title('Spots: selected (r), rejected (b)')  
+        ax1.scatter(self.peak_col, self.peak_row, lw=0.8, s=50, facecolors='none', edgecolors=color)
+        ax1.set_xlabel('Column')
+        ax1.set_ylabel('Row')        
+        ax1.set_title('Spots: selected (R), rejected (B)')  
 
         fig.savefig(self.dir/'plot6_spot.png')   
         plt.close(fig)
@@ -568,39 +575,35 @@ class Movie:
         x_fit = np.linspace(min(self.I_x), max(self.I_x), 1000)
         y_fit = sum_two_gaussian(x_fit, *self.I_param)
 
-        fig = plt.figure(figsize = (20, 10), dpi=300)     
-
-        sp = fig.add_subplot(221)   
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(figsize=(20, 10), ncols=2, nrows=2, dpi=300)     
+  
         bins = np.linspace(min(self.I_u), max(self.I_u), 50)  
-        sp.hist(self.I_u, bins = bins, histtype='step', lw=2, color='b')      
-        sp.hist(self.I_u[self.is_I_u_inlier], bins = bins, histtype='step', lw=2, color='r')    
-        sp.set_title('Intensity unbound (HMM)')
-        sp.set_xlabel('Intensity')
-        sp.set_ylabel('Counts')
-
-        sp = fig.add_subplot(222)   
+        ax1.hist(self.I_u, bins = bins, histtype='step', lw=2, color='b')      
+        ax1.hist(self.I_u[self.is_I_u_inlier], bins = bins, histtype='step', lw=2, color='r')    
+        ax1.set_title('Intensity unbound (HMM)')
+        ax1.set_xlabel('Intensity')
+        ax1.set_ylabel('Counts')
+ 
         bins = np.linspace(min(self.I_b), max(self.I_b), 50)  
-        sp.hist(self.I_b, bins = bins, histtype='step', lw=2, color='b')      
-        sp.hist(self.I_b[self.is_I_b_inlier], bins = bins, histtype='step', lw=2, color='r')      
-        sp.set_title('Intensity bound (HMM)')
-        sp.set_xlabel('Intensity')
-        sp.set_ylabel('Counts')
+        ax2.hist(self.I_b, bins = bins, histtype='step', lw=2, color='b')      
+        ax2.hist(self.I_b[self.is_I_b_inlier], bins = bins, histtype='step', lw=2, color='r')      
+        ax2.set_title('Intensity bound (HMM)')
+        ax2.set_xlabel('Intensity')
+        ax2.set_ylabel('Counts')
 
-        sp = fig.add_subplot(223)  
         bins = np.linspace(min(self.rmsd), max(self.rmsd), 50)          
-        sp.hist(self.rmsd, bins = bins, histtype='step', lw=2, color='b')   
-        sp.hist(self.rmsd[self.is_rmsd_inlier], bins = bins, histtype='step', lw=2, color='r')   
-        sp.set_title('RMSD of fitting (HMM)')
-        sp.set_xlabel('RMSD')
-        sp.set_ylabel('Counts')
+        ax3.hist(self.rmsd, bins = bins, histtype='step', lw=2, color='b')   
+        ax3.hist(self.rmsd[self.is_rmsd_inlier], bins = bins, histtype='step', lw=2, color='r')   
+        ax3.set_title('RMSD of fitting (HMM)')
+        ax3.set_xlabel('RMSD')
+        ax3.set_ylabel('Counts')
 
-        sp = fig.add_subplot(224)  
-        sp.step(self.I_x, self.I_hist, where='mid', c='k', lw=2)
-        sp.plot(x_fit, y_fit, 'r')    
-        sp.set_yscale('log')      
-        sp.set_xlabel('Intensity')
-        sp.set_ylabel('Counts')
-        sp.set_title('Intensity of entire traces')   
+        ax4.step(self.I_x, self.I_hist, where='mid', c='k', lw=2)
+        ax4.plot(x_fit, y_fit, 'r')    
+        ax4.set_yscale('log')      
+        ax4.set_xlabel('Intensity')
+        ax4.set_ylabel('Counts')
+        ax4.set_title('Intensity of entire traces')   
 
         fig.savefig(self.dir/'plot7_spot_fit.png')   
         plt.close(fig)
@@ -619,36 +622,42 @@ class Movie:
             interval = np.ceil(t_max/n_bin)
             bins = np.arange(0.5, interval*n_bin+0.5, interval)
         else:
-            bins = np.arange(0.5, t_max+0.5, 1)
+            bins = np.arange(0.5, t_max+0.5, 1)  
 
-        fig = plt.figure(figsize = (20, 10), dpi=300)     
-
-        sp = fig.add_subplot(231)   
-        sp.hist(t1, bins=bins, histtype='step', lw=2, color='k')
-        sp.set_title('Dwell time, class 1')
-
-        sp = fig.add_subplot(232)   
-        sp.hist(t2, bins=bins, histtype='step', lw=2, color='k')
-        sp.set_title('Dwell time, class 2')
-
-        sp = fig.add_subplot(233)   
-        sp.hist(t3, bins=bins, histtype='step', lw=2, color='k')
-        sp.set_title('Dwell time, class 3')
-
-        sp = fig.add_subplot(234)   
-        sp.hist(t1, bins=bins, histtype='step', lw=2, color='k')
-        sp.set_yscale('log')
-        sp.set_title('Dwell time, class 1')
-
-        sp = fig.add_subplot(235)   
-        sp.hist(t2, bins=bins, histtype='step', lw=2, color='k')
-        sp.set_yscale('log')
-        sp.set_title('Dwell time, class 2')
-
-        sp = fig.add_subplot(236)   
-        sp.hist(t3, bins=bins, histtype='step', lw=2, color='k')
-        sp.set_yscale('log')
-        sp.set_title('Dwell time, class 3')
+        fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(figsize=(20, 10), ncols=3, nrows=2, dpi=300)
+  
+        ax1.hist(t1, bins=bins, histtype='step', lw=2, color='k')
+        ax1.set_xlabel('Frame')
+        ax1.set_ylabel('Counts')
+        ax1.set_title('Dwell time, class 1')
+ 
+        ax2.hist(t2, bins=bins, histtype='step', lw=2, color='k')
+        ax2.set_xlabel('Frame')
+        ax2.set_ylabel('Counts')
+        ax2.set_title('Dwell time, class 2')
+  
+        ax3.hist(t3, bins=bins, histtype='step', lw=2, color='k')
+        ax3.set_xlabel('Frame')
+        ax3.set_ylabel('Counts')
+        ax3.set_title('Dwell time, class 3')
+  
+        ax4.hist(t1, bins=bins, histtype='step', lw=2, color='k')
+        ax4.set_yscale('log')
+        ax4.set_xlabel('Frame')
+        ax4.set_ylabel('Log(Counts)')
+        ax4.set_title('Dwell time, class 1')
+  
+        ax5.hist(t2, bins=bins, histtype='step', lw=2, color='k')
+        ax5.set_yscale('log')
+        ax5.set_xlabel('Frame')
+        ax5.set_ylabel('Log(Counts)')
+        ax5.set_title('Dwell time, class 2')
+   
+        ax6.hist(t3, bins=bins, histtype='step', lw=2, color='k')
+        ax6.set_yscale('log')
+        ax6.set_xlabel('Frame')
+        ax6.set_ylabel('Log(Counts)')
+        ax6.set_title('Dwell time, class 3')
 
         fig.savefig(self.dir/'plot8_dwell_time.png')   
         plt.close(fig)
@@ -669,34 +678,40 @@ class Movie:
         else:
             bins = np.arange(0.5, t_max+0.5, 1)
 
-        fig = plt.figure(figsize = (20, 10), dpi=300)     
+        fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(figsize=(20, 10), ncols=3, nrows=2, dpi=300)   
+ 
+        ax1.hist(t1, bins=bins, histtype='step', lw=2, color='k')
+        ax1.set_xlabel('Frame')
+        ax1.set_ylabel('Counts')
+        ax1.set_title('Wait time, class 1')
+ 
+        ax2.hist(t2, bins=bins, histtype='step', lw=2, color='k')
+        ax2.set_xlabel('Frame')
+        ax2.set_ylabel('Counts')
+        ax2.set_title('Wait time, class 2')
+ 
+        ax3.hist(t3, bins=bins, histtype='step', lw=2, color='k')
+        ax3.set_xlabel('Frame')
+        ax3.set_ylabel('Counts')
+        ax3.set_title('Wait time, class 3')
 
-        sp = fig.add_subplot(231)   
-        sp.hist(t1, bins=bins, histtype='step', lw=2, color='k')
-        sp.set_title('Wait time, class 1')
+        ax4.hist(t1, bins=bins, histtype='step', lw=2, color='k')
+        ax4.set_yscale('log')
+        ax4.set_xlabel('Frame')
+        ax4.set_ylabel('Log(Counts)')
+        ax4.set_title('Wait time, class 1')
 
-        sp = fig.add_subplot(232)   
-        sp.hist(t2, bins=bins, histtype='step', lw=2, color='k')
-        sp.set_title('Wait time, class 2')
-
-        sp = fig.add_subplot(233)   
-        sp.hist(t3, bins=bins, histtype='step', lw=2, color='k')
-        sp.set_title('Wait time, class 3')
-
-        sp = fig.add_subplot(234)   
-        sp.hist(t1, bins=bins, histtype='step', lw=2, color='k')
-        sp.set_yscale('log')
-        sp.set_title('Wait time, class 1')
-
-        sp = fig.add_subplot(235)   
-        sp.hist(t2, bins=bins, histtype='step', lw=2, color='k')
-        sp.set_yscale('log')
-        sp.set_title('Wait time, class 2')
-
-        sp = fig.add_subplot(236)   
-        sp.hist(t3, bins=bins, histtype='step', lw=2, color='k')
-        sp.set_yscale('log')
-        sp.set_title('Wait time, class 3')
+        ax5.hist(t2, bins=bins, histtype='step', lw=2, color='k')
+        ax5.set_yscale('log')
+        ax5.set_xlabel('Frame')
+        ax5.set_ylabel('Log(Counts)')
+        ax5.set_title('Wait time, class 2')
+  
+        ax6.hist(t3, bins=bins, histtype='step', lw=2, color='k')
+        ax6.set_yscale('log')
+        ax6.set_xlabel('Frame')
+        ax6.set_ylabel('Log(Counts)')
+        ax6.set_title('Wait time, class 3')
 
         fig.savefig(self.dir/'plot8_wait_time.png')   
         plt.close(fig)
@@ -714,34 +729,34 @@ class Movie:
         frame = np.arange(self.n_frame)
         n_fig = min(self.save_trace, len(self.trace))        
         for i in range(n_fig):    
-            fig = plt.figure(100, figsize = (25, 15), dpi=300)
-            sp = fig.add_subplot(211)
-            sp.plot(frame, self.trace[i], 'k', lw=2)
-            color = ['b', 'r']
-            sp.plot(frame, self.trace_fit[i], color=color[int(self.is_trace_inlier[i])], lw=2)    
-            sp.axhline(y=self.I_u_inlier.mean(), c='k', ls='--', lw=1) 
-            sp.axhline(y=self.I_b_inlier.mean(), c='k', ls='--', lw=1)     
-            sp.set_ylim([0, 1.5*self.I_b_inlier.mean()])                        
-            sp.set_ylabel('Intensity')
-            sp.set_xlabel('Frame')
-            title_sp = 'Data (K), Fit: ' + 'Inlier (R)' if self.is_trace_inlier[i] == True else 'Outlier (B)'
-            sp.set_title(title_sp)
+            fig, (ax1, ax2) = plt.subplots(figsize=(20, 10), ncols=1, nrows=2, dpi=300)   
 
-            sp = fig.add_subplot(212)
-            sp.plot(frame, self.trace[i]-self.trace_fit[i], 'k', lw=2)        
-            sp.axhline(y=0, c='k', ls='--', lw=1)      
-            sp.axhline(y=max(self.rmsd_inlier), c='k', ls='--', lw=1)                     
-            sp.axhline(y=-max(self.rmsd_inlier), c='k', ls='--', lw=1)    
-            sp.set_ylim([-3*max(self.rmsd_inlier), 3*max(self.rmsd_inlier)])            
-            sp.set_ylabel('Intensity')
-            sp.set_xlabel('Frame')
-            sp.set_title('Residual')
+            ax1.plot(frame, self.trace[i], 'k', lw=2)
+            color = ['b', 'r']
+            ax1.plot(frame, self.trace_fit[i], color=color[int(self.is_trace_inlier[i])], lw=2)    
+            ax1.axhline(y=self.I_u_inlier.mean(), c='k', ls='--', lw=1) 
+            ax1.axhline(y=self.I_b_inlier.mean(), c='k', ls='--', lw=1)     
+            ax1.set_ylim([0, 1.5*self.I_b_inlier.mean()])                        
+            ax1.set_ylabel('Intensity')
+            ax1.set_xlabel('Frame')
+            title_sp = 'Data (K), Fit: ' + 'Inlier (R)' if self.is_trace_inlier[i] == True else 'Outlier (B)'
+            ax1.set_title(title_sp)
+
+            ax2.plot(frame, self.trace[i]-self.trace_fit[i], 'k', lw=2)        
+            ax2.axhline(y=0, c='k', ls='-', lw=1)      
+            ax2.axhline(y=max(self.rmsd_inlier), c='k', ls='--', lw=1)                     
+            ax2.axhline(y=-max(self.rmsd_inlier), c='k', ls='--', lw=1)    
+            ax2.set_ylim([-3*max(self.rmsd_inlier), 3*max(self.rmsd_inlier)])            
+            ax2.set_ylabel('Intensity')
+            ax2.set_xlabel('Frame')
+            ax2.set_title('Residual')
 
             fig.subplots_adjust(wspace=0.3, hspace=0.5)
             print("Save Trace %d (%d %%)" % (i+1, ((i+1)/n_fig)*100))
             fig_name = 'Trace%d.png' %(i+1)
             fig.savefig(trace_dir/fig_name) 
             fig.clf()
+            plt.close(fig)   
 
                     
 def main():
@@ -802,7 +817,7 @@ def main():
         movie.plot7_spot_fit()
         movie.plot8_dwell_time()
         movie.plot9_wait_time()
-        movie.plot10_trace_fit() 
+#        movie.plot10_trace_fit() 
 
 
 if __name__ == "__main__":
@@ -812,8 +827,10 @@ if __name__ == "__main__":
 
 """
 To-do
-* Classes of binding & unbinding events
-* Smooth out drift spikes
+
+* Better drift correction algorithm? use cross-section?
+* better fit for doulbe gaussian? polynomial?
+
 * set dwell_max, dwell_min
 * Save results in a text
 * Seperate code to read text and combine or compare
