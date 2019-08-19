@@ -1,7 +1,7 @@
 name: apc
 channels:
-  - conda-forge
   - anaconda
+  - conda-forge
   - defaults
 dependencies:
   - attrs=19.1.0=py_0
