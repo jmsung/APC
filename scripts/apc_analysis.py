@@ -13,7 +13,9 @@ class Molecule()
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
+
 from __future__ import division, print_function, absolute_import
+import traceback
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
@@ -36,10 +38,10 @@ current_dir = Path(fname).resolve().parent
 # User input ----------------------------------------------------------------
 
 # Jongmin PC
-#data_directory = current_dir.parent/'data'/'19-08-28 Run with apc_analysis_27Aug19'
+data_directory = current_dir.parent/'data'/'19-08-28 Run with apc_analysis_27Aug19'/'antistrep_APC-Cdh1_NHP2&9_50frames_10s_1 X'
 
 # Trap PC
-data_directory = current_dir.parent/'Batch Analysis run with 4Oct2019 code (no Henrik math)'
+#data_directory = current_dir.parent/'Batch Analysis run with 4Oct2019 code (no Henrik math)'
 
 pass_with_result = False
 
@@ -1316,8 +1318,11 @@ def main():
             movie.plot10_wait_icdf()
             movie.plot11_dwell()
             movie.plot_trace_fit() 
-        except:
-            print('\nUnexpected error has occured. ')
+        except Exception:
+            error_message = traceback.format_exc()
+            print(error_message)
+            with open(Path(movie.dir/'result.txt'), "w") as f:
+                f.write('directory = %s' %(error_message))
             continue
 
         # Calculate the process time for each movie
