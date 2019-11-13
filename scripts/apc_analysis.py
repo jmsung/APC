@@ -3,13 +3,12 @@ Created by Jongmin Sung (jongmin.sung@gmail.com)
 
 Single molecule binding and unbinding analysis for anaphase promoting complex (apc) 
 
-class Data() 
-- path, name, load(), list[], n_movie, movies = [Movie()], plot(), analysis(), spot_size, frame_rate, 
-- path, name, n_row, n_col, n_frame, pixel_size, 
-- background, spots = [], molecules = [Molecule()]
+This code is supposed to be used to analyze the binding and unbinding of fluorescent molecules to its binding partner
+anchored on the surface at fixed positions. This code cannot properly analyze the kinetic information if the binding location 
+moves in space over time. One exception is the global sample drift that needs to be corrected for the proper analysis.
 
-class Molecule()
-- position (row, col), intensity 
+
+   
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
@@ -25,7 +24,7 @@ import shutil
 from timeit import default_timer as timer
 from scipy.ndimage import gaussian_filter
 from scipy.optimize import curve_fit
-from tifffile import TiffFile
+from PIL import Image
 from imreg_dft.imreg import translation
 from skimage.feature import peak_local_max
 from skimage.filters import threshold_local
@@ -38,7 +37,7 @@ current_dir = Path(fname).resolve().parent
 # User input ----------------------------------------------------------------
 
 # Jongmin PC
-data_directory = current_dir.parent/'data'/'19-08-28 Run with apc_analysis_27Aug19'/'antistrep_APC-Cdh1_NHP2&9_50frames_10s_1 X'
+data_directory = current_dir.parent/'data'#/'Batch Analysis run'#19-08-28 Run with apc_analysis_27Aug19'#/'antistrep_APC-Cdh1_NHP2&9_50frames_10s_1 X'
 
 # Trap PC
 #data_directory = current_dir.parent/'Batch Analysis run with 4Oct2019 code (no Henrik math)'
@@ -197,8 +196,10 @@ class Movie:
         self.dir = path.parent
         self.name = path.name
 
-    # Read info.txt and movie.tif   
     def read_movie(self):  
+        """
+        Read info.txt and movie.tif using tifffile library. 
+        """
 
         # Parsing parameters from info.txt
         self.info = {}
@@ -224,24 +225,27 @@ class Movie:
         self.save_trace = int(self.info['save_trace'])
         self.two_group = str2bool(self.info['two_group'])
 
-        # Read movie.tif
-        with TiffFile(self.path) as tif:
-            imagej_hyperstack = tif.asarray()
-            imagej_metadata = str(tif.imagej_metadata)
-            self.metadata = imagej_metadata.split(',')
+        # Read movie.tif using PIL.Image function
+        with Image.open(self.path) as movie:
 
-        # Number of frame and window size 
-        self.n_frame = np.size(imagej_hyperstack, 0)
-        self.window = self.n_frame*self.time_interval
+            # Save info (frame, row, col) of the movie
+            self.n_frame = movie.n_frames
+            self.window = self.n_frame*self.time_interval
+            n_row = movie.size[1]
+            n_col = movie.size[0]
 
-        # Crop the image to make the size integer multiple of 10
+            # Read tif file and save into I[frame, row, col]
+            I = np.zeros((self.n_frame, n_row, n_col), dtype=int)
+            for i in range(self.n_frame): 
+                movie.seek(i) # Move to i-th frame
+                I[i,] = np.array(movie, dtype=int)    
+            
+        # Crop the movie to make the size integer multiples of 20
         self.bin_size = 20
-        n_row = np.size(imagej_hyperstack, 1)
         self.n_row = int(int(n_row/self.bin_size)*self.bin_size)        
-        n_col = np.size(imagej_hyperstack, 2) 
         self.n_col = int(int(n_col/self.bin_size)*self.bin_size)
-        self.I_original = imagej_hyperstack[:,:self.n_row,:self.n_col]
-
+        self.I_original = I[:,:self.n_row,:self.n_col]
+ 
         # Crop movie at the center if the size is larger than 300x300
         if self.n_row > 300:
             print('[frame, row, col] = [%d, %d, %d]' %(self.n_frame, self.n_row, self.n_col))  
@@ -255,6 +259,12 @@ class Movie:
 
 
     def correct_offset(self):
+        """
+        Correct offset is an optional function to remove non-uniform background or long lasting dirt spots 
+        This shouldn't be used when drift correction is required since it will remove long lasting spots 
+        which provides the drift information. 
+        """
+
         self.I_offset = self.I_original.copy()
 #        self.I_original_min = np.min(self.I_original, axis=0)
 #        for i in range(self.n_frame):
@@ -262,17 +272,36 @@ class Movie:
 
 
     def correct_flatfield(self):
-        self.I_offset_max = np.max(self.I_offset, axis=0)
+        """
+        Flatfield correction is needed to compensate non-uniform illumination across the field of view. 
+        In general, central area is brighter than the outer area due to Gaussian laser beam profile.
+        However, higher order non-linear pattern also exists due to abberations or suboptimal alignment of optics.
+        This non-uniform illumination can be a problem especially if the intensity at the spot contains information of interest. 
+        In this case, we need to deconvolute the original signal from the molecule and that from non-uniform illumination. 
+        Multiple correction methods have been developed in the field and the literatures are out there. 
+        The method in this code uses binning and averaging of fluorescent intensity in the local area (e.g. 20x20 pixel area)
+        from our actual data, which contains sparsely distributed isolated fluorescent spots across the field of view. 
+        We first make a mask using local binary filter to identify the pixels where fluorescent spots are located. 
+        Then, we get the mean intensity within the mask in each bin area. If the bin size is too small, then it reveals 
+        more detailed spatial pattern of the illumination but it becomes less accurate due to less number of pixels to average.
+        Too large bin size is the opposite case. We use 20x20 pixel area as a default since it works fine with most of our data.  
+        If the density of the spots are to sparse, one needs to increase the binning size, and vice versa. 
+        The locally averaged image is smoothened a bit using a gaussian filter to remove the sharp contrast between
+        the neighboring bins. The original image was normalized by the smoothened image to compensate the non-uniform illumination.
+        The flatfield corrected image was once again binned and averaged to double check that the spatial pattern went away. 
+        """
+
+        self.I_offset_max = np.max(self.I_offset, axis=0) # Maximum intensity projection in each pixel
         self.I_flatfield = self.I_offset.copy()
 
-        # Flatfield correct
+        # Flatfield correction if the option is True
         if self.flatfield_correct:
             print('flatfield_correct = True')
 
             # Masking from local threshold        
             self.mask = self.I_offset_max > threshold_local(self.I_offset_max, block_size=51, offset=-31) 
-            self.I_mask = self.I_offset_max*self.mask 
-            self.I_mask_out = self.I_offset_max*(1-self.mask) 
+            self.I_mask = self.I_offset_max*self.mask # Maximum intensity projection within the mask
+            self.I_mask_out = self.I_offset_max*(1-self.mask) # Max intensity projection out of the mask
 
             # Local averaging signals
             self.I_bin = np.zeros((self.n_row, self.n_col))
@@ -319,6 +348,13 @@ class Movie:
 
 
     def correct_drift(self):
+        """
+
+
+
+        """
+
+
         self.I_drift = self.I_flatfield.copy()
         self.drift_row = np.zeros(len(self.I_drift), dtype='int')
         self.drift_col = np.zeros(len(self.I_drift), dtype='int')
@@ -711,7 +747,7 @@ class Movie:
 
         fig.tight_layout()
         fig.savefig(self.dir/'plot1_original_min_max.png')   
-        plt.close(fig)                                                                                                                                                                                                                                                                                                                                                                                                                                                            
+        plt.close('all')                                                                                                                                                                                                                                                                                                                                                                                                                                                            
 
 
     def plot2_flatfield(self):              
@@ -745,7 +781,7 @@ class Movie:
 
         fig.tight_layout()
         fig.savefig(self.dir/'plot2_flatfield.png')   
-        plt.close(fig)
+        plt.close('all')
 
 
     def plot3_drift(self):                      
@@ -784,7 +820,7 @@ class Movie:
 
         fig.tight_layout()
         fig.savefig(self.dir/'plot3_drift.png')   
-        plt.close(fig)
+        plt.close('all')
 
     def plot4_peak(self):
         fig = plt.figure(figsize=(20, 10), dpi=300)
@@ -803,7 +839,7 @@ class Movie:
 
         fig.tight_layout()
         fig.savefig(self.dir/'plot4_peak.png')   
-        plt.close(fig)
+        plt.close('all')
 
 
     def plot5_spot(self):
@@ -836,7 +872,7 @@ class Movie:
         ax3.set_title('Intensity max')
 
         fig.savefig(self.dir/'plot5_spot.png')   
-        plt.close(fig)
+        plt.close('all')
 
 
     def plot6_spot_fit(self):
@@ -878,7 +914,7 @@ class Movie:
         ax4.set_ylabel('Counts')
 
         fig.savefig(self.dir/'plot6_spot_fit.png')   
-        plt.close(fig)
+        plt.close('all')
 
 
     def plot7_dwell_pdf(self):
@@ -938,7 +974,7 @@ class Movie:
         ax6.set_title('Exp_Finite = %.2f +/- %.2f [s]' %(self.Mean_dwell_3, self.Error_dwell_3))  
 
         fig.savefig(self.dir/'plot7_dwell_pdf.png')   
-        plt.close(fig)
+        plt.close('all')
 
 
     def plot8_wait_pdf(self):
@@ -997,7 +1033,7 @@ class Movie:
         ax6.set_ylabel('Probability density')
         ax6.set_title('Exp_Finite = %.2f +/- %.2f [s]' %(self.Mean_wait_3, self.Error_wait_3))  
         fig.savefig(self.dir/'plot8_wait_pdf.png')   
-        plt.close(fig)
+        plt.close('all')
 
 
     def plot9_dwell_icdf(self):
@@ -1055,7 +1091,7 @@ class Movie:
         ax6.set_title('Exp_Finite = %.2f +/- %.2f [s]' %(self.Mean_dwell_3, self.Error_dwell_3))   
 
         fig.savefig(self.dir/'plot9_dwell_icdf.png')   
-        plt.close(fig)
+        plt.close('all')
 
 
     def plot10_wait_icdf(self):
@@ -1113,7 +1149,7 @@ class Movie:
         ax6.set_title('Exp_Finite = %.2f +/- %.2f [s]' %(self.Mean_wait_3, self.Error_wait_3))  
 
         fig.savefig(self.dir/'plot10_wait_icdf.png')   
-        plt.close(fig)
+        plt.close('all')
 
 
     def plot11_dwell(self):
@@ -1168,7 +1204,7 @@ class Movie:
         ax4.set_title('ICDF, Dwell time = %.3f [s] (N = %d)' %(self.dwell_icdf, len(t2)))
 
         fig.savefig(self.dir/'plot11_dwell.png')   
-        plt.close(fig)
+        plt.close('all')
 
 
     def plot_trace_fit(self):
@@ -1229,7 +1265,7 @@ class Movie:
             fig_name = 'Trace%d.png' %(i+1)
             fig.savefig(trace_dir/fig_name) 
             fig.clf()
-            plt.close(fig)   
+            plt.close('all')   
 
 
                     
@@ -1237,33 +1273,36 @@ def main():
     # Calculate the process time for each movie
     start = timer() 
 
-    # Find all the movies (*.tif) in the directory tree and save the paths in movie_paths
+    # Find all the movies (*.tif) in the directory tree and save the paths in movie_paths for the analysis 
     movie_paths = [fn for fn in data_directory.glob('**/*.tif')]
     print('%d movies are found' %(len(movie_paths)))
 
-    # Run through each movie
+    # Analyze movies one by one 
     for i, movie_path in enumerate(movie_paths):
-
-        # Display path and name of the movie being analyzed
-        print('='*100)
-        print('Movie #%d/%d' %(i+1, len(movie_paths)))
-        print('Path:', movie_path.parent)
-        print('Name:', movie_path.name)
-
-        # Check whether info.txt exists, otherwise skip
-        info_file = Path(movie_path.parent/'info.txt')
-        if not info_file.exists():
-            print('\ninfo.txt does not exist.\n')
-            continue
-
-        # Pass this movie if result.txt already exists and pass_with_result == True 
-        result_file = Path(movie_path.parent/'result.txt')
-        if result_file.exists() and pass_with_result:
-            print('\nresult.txt already exist.\n')
-            continue            
 
         # If an error occurs while analyzing a movie, display a message and skip it. 
         try:
+            # Display path and name of the movie currently being analyzed
+            print('='*100)
+            print('Movie #%d/%d' %(i+1, len(movie_paths)))
+            print('Path:', movie_path.parent)
+            print('Name:', movie_path.name)
+
+            # Pass this movie if info.txt does not exists
+            info_file = Path(movie_path.parent/'info.txt')
+            if not info_file.exists():
+                print('\ninfo.txt does not exist.\n')
+                continue
+
+            # Pass this movie if result.txt already exists and pass_with_result == True 
+            result_file = Path(movie_path.parent/'result.txt')
+            if result_file.exists() and pass_with_result:
+                print('\nresult.txt already exist.\n')
+                continue  
+
+
+
+
             # Make a movie instance
             movie = Movie(movie_path)
 
@@ -1317,11 +1356,23 @@ def main():
             movie.plot9_dwell_icdf()
             movie.plot10_wait_icdf()
             movie.plot11_dwell()
-            movie.plot_trace_fit() 
-        except Exception:
+#            movie.plot_trace_fit() 
+
+            # Delete error.txt if existing 
+            error_file = Path(movie_path.parent/'error.txt')
+            if error_file.exists():
+                os.remove(error_file)
+
+        except:
+            # Delete result.txt if existing 
+            result_file = Path(movie_path.parent/'result.txt')
+            if result_file.exists():
+                os.remove(result_file)
+
+            # Save error message in error.txt
             error_message = traceback.format_exc()
             print(error_message)
-            with open(Path(movie.dir/'result.txt'), "w") as f:
+            with open(Path(movie.dir/'error.txt'), "w") as f:
                 f.write('directory = %s' %(error_message))
             continue
 
